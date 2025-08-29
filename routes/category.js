@@ -6,6 +6,7 @@ const Product = require('../model/product');
 const { uploadCategory } = require('../uploadFile');
 const multer = require('multer');
 const asyncHandler = require('express-async-handler');
+const baseUrl = process.env.BASE_URL || "http://localhost:3000";
 
 // Get all categories
 router.get('/', asyncHandler(async (req, res) => {
@@ -48,7 +49,7 @@ router.post('/', asyncHandler(async (req, res) => {
             const { name } = req.body;
             let imageUrl = 'no_url';
             if (req.file) {
-                imageUrl = `http://localhost:3000/image/category/${req.file.filename}`;
+                imageUrl = `${baseUrl}/image/category/${req.file.filename}`;
             }
             console.log('url ', req.file)
 
@@ -96,7 +97,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
             let image = req.body.image;
 
             if (req.file) {
-                image = `http://localhost:3000/image/category/${req.file.filename}`;
+                image = `${baseUrl}/image/category/${req.file.filename}`;
             }
 
             if (!name || !image) {

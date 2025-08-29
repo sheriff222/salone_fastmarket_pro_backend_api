@@ -6,6 +6,7 @@ const path = require('path');
 const { Conversation, Message, UserStatus } = require('../model/message');
 const User = require('../model/user');
 const Product = require('../model/product');
+const baseUrl = process.env.BASE_URL || "http://localhost:3000";
 
 // Multer setup for file uploads
 const storage = multer.diskStorage({
@@ -155,9 +156,9 @@ router.post('/messages', asyncHandler(async (req, res) => {
         if (messageType === 'text') {
             content.text = text;
         } else if (messageType === 'image' && req.files.image) {
-            content.imageUrl = `http://localhost:3000/image/messages/images/${req.files.image[0].filename}`;
+            content.imageUrl = `${baseUrl}/image/messages/images/${req.files.image[0].filename}`;
         } else if (messageType === 'voice' && req.files.voice) {
-            content.voiceUrl = `http://localhost:3000/image/messages/voice/${req.files.voice[0].filename}`;
+            content.voiceUrl = `${baseUrl}/image/messages/voice/${req.files.voice[0].filename}`;
             content.voiceDuration = voiceDuration || 0;
         }
 

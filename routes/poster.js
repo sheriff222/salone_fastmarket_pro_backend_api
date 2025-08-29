@@ -4,7 +4,7 @@ const Poster = require('../model/poster');
 const { uploadPosters } = require('../uploadFile');
 const multer = require('multer');
 const asyncHandler = require('express-async-handler');
-
+const baseUrl = process.env.BASE_URL || "http://localhost:3000";
 // Get all posters
 router.get('/', asyncHandler(async (req, res) => {
     try {
@@ -46,7 +46,7 @@ router.post('/', asyncHandler(async (req, res) => {
             const { posterName } = req.body;
             let imageUrl = 'no_url';
             if (req.file) {
-                imageUrl = `http://localhost:3000/image/poster/${req.file.filename}`;
+                imageUrl = `${baseUrl}/image/poster/${req.file.filename}`;
             }
 
             if (!posterName) {
@@ -94,7 +94,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 
 
             if (req.file) {
-                image = `http://localhost:3000/image/poster/${req.file.filename}`;
+                image = `${baseUrl}/image/poster/${req.file.filename}`;
             }
 
             if (!posterName || !image) {

@@ -5,7 +5,7 @@ const Product = require('../model/product');
 const multer = require('multer');
 const { uploadProduct } = require('../uploadFile');
 const asyncHandler = require('express-async-handler');
-
+const baseUrl = process.env.BASE_URL || "http://localhost:3000";
 // Create new product - Updated to handle both Flutter (images array) and existing (image1-5) formats
 router.post('/', asyncHandler(async (req, res) => {
     try {
@@ -62,7 +62,7 @@ router.post('/', asyncHandler(async (req, res) => {
             // Handle Flutter's 'images' array format
             if (req.files && req.files['images']) {
                 req.files['images'].forEach((file, index) => {
-                    const imageUrl = `http://localhost:3000/image/products/${file.filename}`;
+                    const imageUrl = `${baseUrl}/image/products/${file.filename}`;
                     imageUrls.push({ image: index + 1, url: imageUrl });
                 });
             }
@@ -73,7 +73,7 @@ router.post('/', asyncHandler(async (req, res) => {
                 fields.forEach((field, index) => {
                     if (req.files[field] && req.files[field].length > 0) {
                         const file = req.files[field][0];
-                        const imageUrl = `http://localhost:3000/image/products/${file.filename}`;
+                        const imageUrl = `${baseUrl}/image/products/${file.filename}`;
                         imageUrls.push({ image: index + 1, url: imageUrl });
                     }
                 });
@@ -191,7 +191,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
             // Handle Flutter's 'images' array format for updates
             if (req.files && req.files['images']) {
                 req.files['images'].forEach((file, index) => {
-                    const imageUrl = `http://localhost:3000/image/products/${file.filename}`;
+                    const imageUrl = `${baseUrl}/image/products/${file.filename}`;
                     let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));
                     if (imageEntry) {
                         imageEntry.url = imageUrl;
@@ -206,7 +206,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
             fields.forEach((field, index) => {
                 if (req.files[field] && req.files[field].length > 0) {
                     const file = req.files[field][0];
-                    const imageUrl = `http://localhost:3000/image/products/${file.filename}`;
+                    const imageUrl = `${baseUrl}/image/products/${file.filename}`;
                     let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));
                     if (imageEntry) {
                         imageEntry.url = imageUrl;
