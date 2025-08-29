@@ -6,7 +6,7 @@ const path = require('path');
 const { Conversation, Message, UserStatus } = require('../model/message');
 const User = require('../model/user');
 const Product = require('../model/product');
-const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+const baseUrl = process.env.BASE_URL  ;
 
 // Multer setup for file uploads
 const storage = multer.diskStorage({

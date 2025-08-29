@@ -4,7 +4,7 @@ const Poster = require('../model/poster');
 const { uploadPosters } = require('../uploadFile');
 const multer = require('multer');
 const asyncHandler = require('express-async-handler');
-const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+const baseUrl = process.env.BASE_URL  ;
 // Get all posters
 router.get('/', asyncHandler(async (req, res) => {
     try {

@@ -6,7 +6,7 @@ const Product = require('../model/product');
 const { uploadCategory } = require('../uploadFile');
 const multer = require('multer');
 const asyncHandler = require('express-async-handler');
-const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+const baseUrl = process.env.BASE_URL  ;
 
 // Get all categories
 router.get('/', asyncHandler(async (req, res) => {

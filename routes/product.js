@@ -5,7 +5,7 @@ const Product = require('../model/product');
 const multer = require('multer');
 const { uploadProduct } = require('../uploadFile');
 const asyncHandler = require('express-async-handler');
-const baseUrl = process.env.BASE_URL || "http://localhost:3000";
+const baseUrl = process.env.BASE_URL  ;
 // Create new product - Updated to handle both Flutter (images array) and existing (image1-5) formats
 router.post('/', asyncHandler(async (req, res) => {
     try {
