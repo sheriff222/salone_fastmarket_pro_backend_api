@@ -1,0 +1,1033 @@
+// routes/searchRoutes.js - ENHANCED VERSION
+const express = require('express');
+const router = express.Router();
+const Product = require('../model/product');
+const Category = require('../model/category');
+const SubCategory = require('../model/subCategory');
+const AnalyticsEvent = require('../model/analytics');
+const SponsoredProduct = require('../model/sponsoredProduct');
+const SearchHistory = require('../model/searchHistory');
+const asyncHandler = require('express-async-handler');
+const mongoose = require('mongoose');
+
+// In-memory cache for search data
+const NodeCache = require('node-cache');
+const cache = new NodeCache({ stdTTL: 600 }); // 10-minute cache
+
+// ============================================
+// NEW: AUTO-COMPLETE/SUGGESTIONS ENDPOINT
+// ============================================
+router.get('/suggestions', asyncHandler(async (req, res) => {
+    const { query, userId = null, limit = 6 } = req.query;
+    
+    if (!query || query.trim().length < 2) {
+        return res.json({
+            success: true,
+            message: "Query too short",
+            data: []
+        });
+    }
+
+    try {
+        const searchQuery = query.trim().toLowerCase();
+        const suggestions = [];
+
+        // 1. Get recent searches (2 suggestions)
+        const recentSearches = await SearchHistory.find({
+            userId: userId || null,
+            query: { $regex: searchQuery, $options: 'i' }
+        })
+        .sort({ createdAt: -1 })
+        .limit(2)
+        .lean();
+
+        suggestions.push(...recentSearches.map(s => ({
+            text: s.query,
+            type: 'recent',
+            icon: 'history'
+        })));
+
+        // 2. Get matching product names (4 suggestions)
+        const products = await Product.find({
+            $or: [
+                { name: { $regex: searchQuery, $options: 'i' } },
+                { description: { $regex: searchQuery, $options: 'i' } }
+            ],
+            quantity: { $gt: 0 }
+        })
+        .select('name proCategoryId')
+        .populate('proCategoryId', 'name')
+        .limit(4)
+        .lean();
+
+        suggestions.push(...products.map(p => ({
+            text: p.name,
+            type: 'product',
+            icon: 'search',
+            category: p.proCategoryId?.name
+        })));
+
+        // Remove duplicates and limit to requested amount
+        const uniqueSuggestions = suggestions
+            .filter((item, index, self) => 
+                index === self.findIndex(t => t.text === item.text)
+            )
+            .slice(0, parseInt(limit));
+
+        res.json({
+            success: true,
+            message: "Suggestions retrieved successfully",
+            data: uniqueSuggestions
+        });
+
+    } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        res.json({
+            success: true,
+            data: [],
+            message: 'Error loading suggestions'
+        });
+    }
+}));
+
+// ============================================
+// NEW: RELATED SEARCHES
+// ============================================
+router.get('/related-searches', asyncHandler(async (req, res) => {
+    const { query, limit = 8 } = req.query;
+    
+    if (!query) {
+        return res.json({
+            success: true,
+            data: [],
+            message: 'Query required'
+        });
+    }
+
+    try {
+        const searchQuery = query.trim().toLowerCase();
+        const relatedSearches = [];
+
+        // Find products matching the query
+        const matchingProducts = await Product.find({
+            $or: [
+                { name: { $regex: searchQuery, $options: 'i' } },
+                { description: { $regex: searchQuery, $options: 'i' } }
+            ],
+            quantity: { $gt: 0 }
+        })
+        .populate('proCategoryId', 'name')
+        .populate('proSubCategoryId', 'name')
+        .limit(10)
+        .lean();
+
+        if (matchingProducts.length > 0) {
+            // Get unique categories from matching products
+            const categories = [...new Set(matchingProducts
+                .map(p => p.proCategoryId?.name)
+                .filter(Boolean))];
+
+            // Get unique subcategories
+            const subCategories = [...new Set(matchingProducts
+                .map(p => p.proSubCategoryId?.name)
+                .filter(Boolean))];
+
+            // Build related search terms
+            categories.forEach(cat => {
+                relatedSearches.push({
+                    query: cat,
+                    type: 'category',
+                    displayText: `${cat}`
+                });
+            });
+
+            subCategories.slice(0, 3).forEach(sub => {
+                relatedSearches.push({
+                    query: `${query} ${sub}`,
+                    type: 'subcategory',
+                    displayText: `${query} in ${sub}`
+                });
+            });
+
+            // Add price-based refinements
+            relatedSearches.push({
+                query: `cheap ${query}`,
+                type: 'price',
+                displayText: `Affordable ${query}`
+            });
+
+            relatedSearches.push({
+                query: `best ${query}`,
+                type: 'quality',
+                displayText: `Best ${query}`
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Related searches retrieved",
+            data: relatedSearches.slice(0, parseInt(limit))
+        });
+
+    } catch (error) {
+        console.error('Error fetching related searches:', error);
+        res.json({
+            success: true,
+            data: [],
+            message: 'Error loading related searches'
+        });
+    }
+}));
+
+// ============================================
+// NEW: REFINE SEARCH FILTERS
+// ============================================
+router.get('/refine-filters', asyncHandler(async (req, res) => {
+    const { query } = req.query;
+    
+    if (!query) {
+        return res.json({
+            success: true,
+            data: {},
+            message: 'Query required'
+        });
+    }
+
+    try {
+        const searchQuery = query.trim().toLowerCase();
+
+        // Find all matching products
+        const products = await Product.find({
+            $or: [
+                { name: { $regex: searchQuery, $options: 'i' } },
+                { description: { $regex: searchQuery, $options: 'i' } }
+            ],
+            quantity: { $gt: 0 }
+        })
+        .populate('proCategoryId', 'name')
+        .populate('proSubCategoryId', 'name')
+        .populate('proBrandId', 'name')
+        .lean();
+
+        // Extract unique filters
+        const categories = [...new Set(products
+            .map(p => ({ id: p.proCategoryId?._id, name: p.proCategoryId?.name }))
+            .filter(c => c.name)
+            .map(c => JSON.stringify(c)))]
+            .map(c => JSON.parse(c));
+
+        const subCategories = [...new Set(products
+            .map(p => ({ id: p.proSubCategoryId?._id, name: p.proSubCategoryId?.name }))
+            .filter(c => c.name)
+            .map(c => JSON.stringify(c)))]
+            .map(c => JSON.parse(c));
+
+        const brands = [...new Set(products
+            .map(p => ({ id: p.proBrandId?._id, name: p.proBrandId?.name }))
+            .filter(b => b.name)
+            .map(b => JSON.stringify(b)))]
+            .map(b => JSON.parse(b));
+
+        // Get price range
+        const prices = products.map(p => p.offerPrice || p.price || 0).filter(p => p > 0);
+        const priceRange = prices.length > 0 ? {
+            min: Math.min(...prices),
+            max: Math.max(...prices)
+        } : null;
+
+        res.json({
+            success: true,
+            message: "Refine filters retrieved",
+            data: {
+                categories,
+                subCategories,
+                brands,
+                priceRange,
+                totalProducts: products.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching refine filters:', error);
+        res.json({
+            success: true,
+            data: {},
+            message: 'Error loading filters'
+        });
+    }
+}));
+
+// ============================================
+// 1. WHAT ARE YOU LOOKING FOR
+// ============================================
+router.get('/what-are-you-looking-for', asyncHandler(async (req, res) => {
+    const { limit = 6 } = req.query;
+    
+    try {
+        const cacheKey = `what_looking_for_${limit}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                success: true,
+                message: "High clicked subcategories retrieved (cached)",
+                data: cached
+            });
+        }
+
+        const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        
+        const topSubCategories = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    action: { $in: ['click', 'view'] },
+                    timestamp: { $gte: last30Days }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'products',
+                    localField: 'productId',
+                    foreignField: '_id',
+                    as: 'product'
+                }
+            },
+            { $unwind: '$product' },
+            {
+                $group: {
+                    _id: '$product.proSubCategoryId',
+                    clickCount: { $sum: 1 }
+                }
+            },
+            { $sort: { clickCount: -1 } },
+            { $limit: parseInt(limit) }
+        ]);
+
+        const subCategoryIds = topSubCategories.map(item => item._id);
+        
+        const subCategories = await SubCategory.find({ 
+            _id: { $in: subCategoryIds } 
+        })
+        .populate('categoryId', 'name image')
+        .lean();
+
+        const enrichedSubCategories = subCategories.map(sub => {
+            const analytics = topSubCategories.find(t => t._id.toString() === sub._id.toString());
+            return {
+                ...sub,
+                clickCount: analytics?.clickCount || 0,
+                categoryImage: sub.categoryId?.image,
+                categoryName: sub.categoryId?.name
+            };
+        }).sort(() => 0.5 - Math.random());
+
+        cache.set(cacheKey, enrichedSubCategories);
+
+        res.json({
+            success: true,
+            message: "High clicked subcategories retrieved successfully",
+            data: enrichedSubCategories
+        });
+
+    } catch (error) {
+        console.error('Error fetching what-are-you-looking-for:', error);
+        const fallbackSubCategories = await SubCategory.find()
+            .populate('categoryId', 'name image')
+            .limit(parseInt(limit))
+            .lean();
+        
+        res.json({
+            success: true,
+            message: "Subcategories retrieved (fallback)",
+            data: fallbackSubCategories
+        });
+    }
+}));
+
+// ============================================
+// 2. RECENT SEARCHES
+// ============================================
+router.get('/recent-searches', asyncHandler(async (req, res) => {
+    const { userId = null, limit = 10 } = req.query;
+    
+    try {
+        let query = {};
+        
+        if (userId) {
+            query.userId = userId;
+        } else {
+            query.userId = null;
+        }
+
+        const recentSearches = await SearchHistory.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit))
+            .lean();
+
+        res.json({
+            success: true,
+            message: "Recent searches retrieved successfully",
+            data: recentSearches
+        });
+
+    } catch (error) {
+        console.error('Error fetching recent searches:', error);
+        res.json({
+            success: true,
+            message: "No recent searches found",
+            data: []
+        });
+    }
+}));
+
+// ============================================
+// 3. SAVED SEARCHES
+// ============================================
+router.get('/saved-searches', asyncHandler(async (req, res) => {
+    const { userId } = req.query;
+    
+    if (!userId) {
+        return res.status(400).json({
+            success: false,
+            message: "User ID is required for saved searches"
+        });
+    }
+
+    try {
+        const savedSearches = await SearchHistory.find({
+            userId,
+            isSaved: true
+        })
+        .sort({ updatedAt: -1 })
+        .lean();
+
+        res.json({
+            success: true,
+            message: "Saved searches retrieved successfully",
+            data: savedSearches
+        });
+
+    } catch (error) {
+        console.error('Error fetching saved searches:', error);
+        res.json({
+            success: true,
+            message: "No saved searches found",
+            data: []
+        });
+    }
+}));
+
+// ============================================
+// 4. SAVE/UNSAVE SEARCH
+// ============================================
+router.post('/toggle-save-search', asyncHandler(async (req, res) => {
+    const { userId, query, isSaved } = req.body;
+    
+    if (!userId || !query) {
+        return res.status(400).json({
+            success: false,
+            message: "User ID and query are required"
+        });
+    }
+
+    try {
+        const search = await SearchHistory.findOneAndUpdate(
+            { userId, query: query.toLowerCase().trim() },
+            { 
+                $set: { isSaved },
+                $setOnInsert: { resultCount: 0 }
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            message: isSaved ? "Search saved successfully" : "Search unsaved",
+            data: search
+        });
+
+    } catch (error) {
+        console.error('Error toggling save search:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+// ============================================
+// 5. DELETE SEARCH FROM HISTORY
+// ============================================
+router.delete('/search-history/:searchId', asyncHandler(async (req, res) => {
+    const { searchId } = req.params;
+    const { userId } = req.query;
+
+    try {
+        const query = { _id: searchId };
+        if (userId) {
+            query.userId = userId;
+        }
+
+        await SearchHistory.findOneAndDelete(query);
+
+        res.json({
+            success: true,
+            message: "Search deleted from history"
+        });
+
+    } catch (error) {
+        console.error('Error deleting search:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+// ============================================
+// 6. CLEAR ALL SEARCH HISTORY
+// ============================================
+router.delete('/clear-search-history', asyncHandler(async (req, res) => {
+    const { userId } = req.query;
+
+    try {
+        const query = userId ? { userId, isSaved: false } : { userId: null };
+        
+        const result = await SearchHistory.deleteMany(query);
+
+        res.json({
+            success: true,
+            message: `${result.deletedCount} searches cleared from history`
+        });
+
+    } catch (error) {
+        console.error('Error clearing search history:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+// ============================================
+// 7. TRENDING SEARCHES
+// ============================================
+router.get('/trending-searches', asyncHandler(async (req, res) => {
+    const { limit = 20 } = req.query;
+    
+    try {
+        const cacheKey = `trending_searches_${limit}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                success: true,
+                message: "Trending searches retrieved (cached)",
+                data: cached
+            });
+        }
+
+        const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const trendingFromHistory = await SearchHistory.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: last7Days },
+                    query: { $ne: '' }
+                }
+            },
+            {
+                $group: {
+                    _id: '$query',
+                    searchCount: { $sum: 1 },
+                    lastSearched: { $max: '$createdAt' }
+                }
+            },
+            { $sort: { searchCount: -1, lastSearched: -1 } },
+            { $limit: parseInt(limit) / 2 }
+        ]);
+
+        const trendingFromAnalytics = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    action: 'view',
+                    timestamp: { $gte: last7Days }
+                }
+            },
+            {
+                $group: {
+                    _id: '$productId',
+                    viewCount: { $sum: 1 }
+                }
+            },
+            { $sort: { viewCount: -1 } },
+            { $limit: parseInt(limit) / 2 }
+        ]);
+
+        const productIds = trendingFromAnalytics.map(item => item._id);
+        const products = await Product.find({ _id: { $in: productIds } })
+            .select('name')
+            .lean();
+
+        const trendingProducts = products.map(product => ({
+            term: product.name,
+            type: 'product',
+            viewCount: trendingFromAnalytics.find(t => 
+                t._id.toString() === product._id.toString()
+            )?.viewCount || 0
+        }));
+
+        const trendingSearches = trendingFromHistory.map(item => ({
+            term: item._id,
+            type: 'search',
+            searchCount: item.searchCount
+        }));
+
+        const combined = [...trendingSearches, ...trendingProducts]
+            .sort(() => 0.5 - Math.random())
+            .slice(0, parseInt(limit));
+
+        cache.set(cacheKey, combined);
+
+        res.json({
+            success: true,
+            message: "Trending searches retrieved successfully",
+            data: combined
+        });
+
+    } catch (error) {
+        console.error('Error fetching trending searches:', error);
+        res.json({
+            success: true,
+            message: "No trending searches found",
+            data: []
+        });
+    }
+}));
+
+// ============================================
+// 8. SPONSORED FOR YOU
+// ============================================
+router.get('/sponsored-for-you', asyncHandler(async (req, res) => {
+    const { limit = 6, userId = null } = req.query;
+    
+    try {
+        const activeSponsored = await SponsoredProduct.find({
+            isActive: true,
+            status: 'active',
+            startDate: { $lte: new Date() },
+            endDate: { $gte: new Date() }
+        })
+        .populate({
+            path: 'productId',
+            populate: [
+                { path: 'proCategoryId', select: 'name' },
+                { path: 'proSubCategoryId', select: 'name' },
+                { path: 'sellerId', select: 'fullName' }
+            ]
+        })
+        .sort({ priority: -1 })
+        .limit(parseInt(limit))
+        .lean();
+
+        const products = activeSponsored
+            .filter(s => s.productId && s.productId.quantity > 0)
+            .map(s => ({
+                ...s.productId,
+                isSponsored: true,
+                sponsorshipType: s.sponsorshipType,
+                sponsorshipId: s._id
+            }));
+
+        res.json({
+            success: true,
+            message: "Sponsored products retrieved successfully",
+            data: products
+        });
+
+    } catch (error) {
+        console.error('Error fetching sponsored products:', error);
+        res.json({
+            success: true,
+            message: "No sponsored products available",
+            data: []
+        });
+    }
+}));
+
+// ============================================
+// 9. YOU MIGHT LIKE
+// ============================================
+router.get('/you-might-like', asyncHandler(async (req, res) => {
+    const { userId = null, limit = 10 } = req.query;
+    
+    try {
+        let recommendedProducts = [];
+        
+        if (userId) {
+            const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            
+            const userViewedCategories = await AnalyticsEvent.aggregate([
+                {
+                    $match: {
+                        userId: new mongoose.Types.ObjectId(userId),
+                        action: 'view',
+                        timestamp: { $gte: last30Days }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'products',
+                        localField: 'productId',
+                        foreignField: '_id',
+                        as: 'product'
+                    }
+                },
+                { $unwind: '$product' },
+                {
+                    $group: {
+                        _id: '$product.proCategoryId',
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { count: -1 } },
+                { $limit: 3 }
+            ]);
+
+            const preferredCategories = userViewedCategories.map(c => c._id);
+
+            if (preferredCategories.length > 0) {
+                recommendedProducts = await Product.find({
+                    proCategoryId: { $in: preferredCategories },
+                    quantity: { $gt: 0 }
+                })
+                .populate('proCategoryId', 'name')
+                .populate('proSubCategoryId', 'name')
+                .populate('sellerId', 'fullName')
+                .limit(parseInt(limit))
+                .lean();
+            }
+        }
+
+        if (recommendedProducts.length === 0) {
+            const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            
+            const popularProductIds = await AnalyticsEvent.aggregate([
+                {
+                    $match: {
+                        action: 'view',
+                        timestamp: { $gte: last7Days }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$productId',
+                        viewCount: { $sum: 1 }
+                    }
+                },
+                { $sort: { viewCount: -1 } },
+                { $limit: parseInt(limit) * 2 }
+            ]);
+
+            const productIds = popularProductIds.map(p => p._id);
+
+            recommendedProducts = await Product.find({
+                _id: { $in: productIds },
+                quantity: { $gt: 0 }
+            })
+            .populate('proCategoryId', 'name')
+            .populate('proSubCategoryId', 'name')
+            .populate('sellerId', 'fullName')
+            .lean();
+        }
+
+        const sponsoredCount = Math.max(1, Math.floor(parseInt(limit) * 0.2));
+        const activeSponsored = await SponsoredProduct.find({
+            isActive: true,
+            status: 'active',
+            startDate: { $lte: new Date() },
+            endDate: { $gte: new Date() }
+        })
+        .populate({
+            path: 'productId',
+            populate: [
+                { path: 'proCategoryId', select: 'name' },
+                { path: 'proSubCategoryId', select: 'name' },
+                { path: 'sellerId', select: 'fullName' }
+            ]
+        })
+        .limit(sponsoredCount)
+        .lean();
+
+        const sponsoredProducts = activeSponsored
+            .filter(s => s.productId && s.productId.quantity > 0)
+            .map(s => ({
+                ...s.productId,
+                isSponsored: true,
+                sponsorshipType: s.sponsorshipType
+            }));
+
+        const combined = [...recommendedProducts, ...sponsoredProducts]
+            .sort(() => 0.5 - Math.random())
+            .slice(0, parseInt(limit));
+
+        res.json({
+            success: true,
+            message: "Recommendations retrieved successfully",
+            data: combined
+        });
+
+    } catch (error) {
+        console.error('Error fetching you-might-like:', error);
+        res.json({
+            success: true,
+            message: "No recommendations available",
+            data: []
+        });
+    }
+}));
+
+// ============================================
+// 10. EXPLORE BY TYPE
+// ============================================
+router.get('/explore/:type', asyncHandler(async (req, res) => {
+    const { type } = req.params;
+    const { limit = 20 } = req.query;
+    
+    try {
+        const categories = await Category.find().lean();
+        
+        const categoriesWithSubCategories = await Promise.all(
+            categories.map(async (category) => {
+                const subCategories = await SubCategory.find({
+                    categoryId: category._id
+                })
+                .limit(parseInt(limit))
+                .lean();
+
+                const subCategoriesWithCount = await Promise.all(
+                    subCategories.map(async (sub) => {
+                        const productCount = await Product.countDocuments({
+                            proSubCategoryId: sub._id,
+                            quantity: { $gt: 0 }
+                        });
+
+                        return {
+                            ...sub,
+                            productCount,
+                            categoryName: category.name,
+                            categoryImage: category.image
+                        };
+                    })
+                );
+
+                return {
+                    category,
+                    subCategories: subCategoriesWithCount.filter(s => s.productCount > 0)
+                };
+            })
+        );
+
+        const filtered = categoriesWithSubCategories
+            .filter(c => c.subCategories.length > 0);
+
+        res.json({
+            success: true,
+            message: `${type} subcategories retrieved successfully`,
+            data: filtered
+        });
+
+    } catch (error) {
+        console.error(`Error fetching explore ${type}:`, error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+// ============================================
+// 11. MAIN SEARCH (ENHANCED)
+// ============================================
+router.post('/search', asyncHandler(async (req, res) => {
+    const { query, userId = null, page = 1, limit = 20, filters = {} } = req.body;
+    
+    if (!query || query.trim().length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Search query is required"
+        });
+    }
+
+    try {
+        const skip = (page - 1) * limit;
+        const searchQuery = query.trim().toLowerCase();
+
+        // Build search filter
+        let searchFilter = {
+            $or: [
+                { name: { $regex: searchQuery, $options: 'i' } },
+                { description: { $regex: searchQuery, $options: 'i' } }
+            ],
+            quantity: { $gt: 0 }
+        };
+
+        // Apply additional filters if provided
+        if (filters.categoryId) {
+            searchFilter.proCategoryId = filters.categoryId;
+        }
+        if (filters.subCategoryId) {
+            searchFilter.proSubCategoryId = filters.subCategoryId;
+        }
+        if (filters.brandId) {
+            searchFilter.proBrandId = filters.brandId;
+        }
+        if (filters.minPrice || filters.maxPrice) {
+            searchFilter.price = {};
+            if (filters.minPrice) searchFilter.price.$gte = filters.minPrice;
+            if (filters.maxPrice) searchFilter.price.$lte = filters.maxPrice;
+        }
+
+        // Get products
+        const products = await Product.find(searchFilter)
+            .populate('proCategoryId', 'name')
+            .populate('proSubCategoryId', 'name')
+            .populate('sellerId', 'fullName')
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        const totalCount = await Product.countDocuments(searchFilter);
+
+        // Get sponsored products for this search
+        const sponsoredProducts = await SponsoredProduct.find({
+            isActive: true,
+            status: 'active',
+            startDate: { $lte: new Date() },
+            endDate: { $gte: new Date() }
+        })
+        .populate({
+            path: 'productId',
+            match: searchFilter,
+            populate: [
+                { path: 'proCategoryId', select: 'name' },
+                { path: 'proSubCategoryId', select: 'name' },
+                { path: 'sellerId', select: 'fullName' }
+            ]
+        })
+        .limit(3)
+        .lean();
+
+        const sponsoredMatches = sponsoredProducts
+            .filter(s => s.productId)
+            .map(s => ({
+                ...s.productId,
+                isSponsored: true,
+                sponsorshipType: s.sponsorshipType
+            }));
+
+        // Merge sponsored products randomly
+        let finalProducts = [...products];
+        sponsoredMatches.forEach((sponsored, index) => {
+            const randomPosition = Math.floor(Math.random() * (finalProducts.length + 1));
+            finalProducts.splice(randomPosition, 0, sponsored);
+        });
+
+        // Limit to requested amount
+        finalProducts = finalProducts.slice(0, parseInt(limit));
+
+        // Save to search history
+        await SearchHistory.findOneAndUpdate(
+            { 
+                userId: userId || null, 
+                query: searchQuery 
+            },
+            { 
+                $set: { resultCount: totalCount },
+                $setOnInsert: { isSaved: false, searchType: 'manual' }
+            },
+            { upsert: true }
+        );
+
+        res.json({
+            success: true,
+            message: "Search completed successfully",
+            data: {
+                products: finalProducts,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limit),
+                    totalResults: totalCount,
+                    hasMore: skip + products.length < totalCount
+                },
+                query: searchQuery
+            }
+        });
+
+    } catch (error) {
+        console.error('Error during search:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+// ============================================
+// 12. CATEGORY PAGE
+// ============================================
+router.get('/category/:categoryId/subcategory/:subCategoryId', asyncHandler(async (req, res) => {
+    const { categoryId, subCategoryId } = req.params;
+    const { page = 1, limit = 20, sortBy = 'createdAt', order = 'desc' } = req.query;
+    
+    try {
+        const skip = (page - 1) * limit;
+        const sortOrder = order === 'desc' ? -1 : 1;
+        const sortCriteria = { [sortBy]: sortOrder };
+
+        const products = await Product.find({
+            proCategoryId: categoryId,
+            proSubCategoryId: subCategoryId,
+            quantity: { $gt: 0 }
+        })
+        .populate('proCategoryId', 'name')
+        .populate('proSubCategoryId', 'name')
+        .populate('sellerId', 'fullName')
+        .sort(sortCriteria)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+        const totalCount = await Product.countDocuments({
+            proCategoryId: categoryId,
+            proSubCategoryId: subCategoryId,
+            quantity: { $gt: 0 }
+        });
+
+        const subCategory = await SubCategory.findById(subCategoryId)
+            .populate('categoryId', 'name image')
+            .lean();
+
+        res.json({
+            success: true,
+            message: "Category products retrieved successfully",
+            data: {
+                products,
+                subCategory,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limit),
+                    totalResults: totalCount,
+                    hasMore: skip + products.length < totalCount
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching category products:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+}));
+
+module.exports = router;
