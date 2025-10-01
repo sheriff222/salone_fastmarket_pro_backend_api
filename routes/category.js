@@ -6,7 +6,7 @@ const Product = require('../model/product');
 const { uploadCategory } = require('../uploadFile');
 const multer = require('multer');
 const asyncHandler = require('express-async-handler');
-const baseUrl = process.env.BASE_URL  ;
+const baseUrl = process.env.BASE_URL || "http://localhost:3000";
 
 // Get all categories
 router.get('/', asyncHandler(async (req, res) => {
@@ -32,9 +32,32 @@ router.get('/:id', asyncHandler(async (req, res) => {
     }
 }));
 
-// Create a new category with image upload
+// MODIFIED: Create a new category with image upload OR URL support
 router.post('/', asyncHandler(async (req, res) => {
     try {
+        // Check if imageUrl is provided in request body (for bulk creation)
+        if (req.body.imageUrl && req.body.name) {
+            const { name, imageUrl } = req.body;
+            
+            if (!name) {
+                return res.status(400).json({ success: false, message: "Name is required." });
+            }
+
+            try {
+                const newCategory = new Category({
+                    name: name,
+                    image: imageUrl
+                });
+                await newCategory.save();
+                res.json({ success: true, message: "Category created successfully.", data: null });
+            } catch (error) {
+                console.error("Error creating category:", error);
+                res.status(500).json({ success: false, message: error.message });
+            }
+            return;
+        }
+
+        // Original file upload logic
         uploadCategory.single('img')(req, res, async function (err) {
             if (err instanceof multer.MulterError) {
                 if (err.code === 'LIMIT_FILE_SIZE') {
@@ -77,10 +100,32 @@ router.post('/', asyncHandler(async (req, res) => {
     }
 }));
 
-// Update a category
+// MODIFIED: Update a category with URL support
 router.put('/:id', asyncHandler(async (req, res) => {
     try {
         const categoryID = req.params.id;
+        
+        // Check if imageUrl is provided in request body (for bulk updates)
+        if (req.body.imageUrl && req.body.name) {
+            const { name, imageUrl } = req.body;
+
+            if (!name || !imageUrl) {
+                return res.status(400).json({ success: false, message: "Name and image are required." });
+            }
+
+            try {
+                const updatedCategory = await Category.findByIdAndUpdate(categoryID, { name: name, image: imageUrl }, { new: true });
+                if (!updatedCategory) {
+                    return res.status(404).json({ success: false, message: "Category not found." });
+                }
+                res.json({ success: true, message: "Category updated successfully.", data: null });
+            } catch (error) {
+                res.status(500).json({ success: false, message: error.message });
+            }
+            return;
+        }
+
+        // Original file upload logic
         uploadCategory.single('img')(req, res, async function (err) {
             if (err instanceof multer.MulterError) {
                 if (err.code === 'LIMIT_FILE_SIZE') {
@@ -149,10 +194,6 @@ router.delete('/:id', asyncHandler(async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 }));
-
-
-
-
 
 
 module.exports = router;

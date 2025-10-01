@@ -172,13 +172,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 // Update a user (protected)
+// Update a user (protected)
 router.put('/:id', protect, asyncHandler(async (req, res) => {
     const {
         phoneNumber, password, accountType, fullName, email, dateOfBirth, gender,
         streetAddress, city, district, postalCode, businessInfo
     } = req.body;
 
-     if (phoneNumber) {
+    // Initialize userData object first
+    const userData = {};
+
+    // Handle phone number validation and formatting
+    if (phoneNumber) {
         const phoneValidation = validateSierraLeonePhone(phoneNumber);
         if (phoneValidation) {
             return res.status(400).json({ success: false, message: phoneValidation });
@@ -186,26 +191,29 @@ router.put('/:id', protect, asyncHandler(async (req, res) => {
         userData.phoneNumber = formatPhoneNumber(phoneNumber);
     }
     
+    // Handle password
     if (password) {
         userData.password = password;
     }
 
-    const userData = {
-        phoneNumber: phoneNumber ? formatPhoneNumber(phoneNumber) : undefined,
-        password,
-        accountType,
-        fullName,
-        email,
-        dateOfBirth,
-        gender,
-        address: {
+    // Handle other basic fields
+    if (accountType) userData.accountType = accountType;
+    if (fullName) userData.fullName = fullName;
+    if (email) userData.email = email;
+    if (dateOfBirth) userData.dateOfBirth = dateOfBirth;
+    if (gender) userData.gender = gender;
+
+    // Handle address
+    if (streetAddress || city || district || postalCode) {
+        userData.address = {
             street: streetAddress,
             city,
             district,
             postalCode
-        }
-    };
+        };
+    }
 
+    // Handle business info for sellers
     if (accountType === 'seller' && businessInfo) {
         userData.businessInfo = {
             businessName: businessInfo.businessName,

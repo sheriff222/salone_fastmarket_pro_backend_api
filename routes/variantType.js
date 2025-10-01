@@ -5,6 +5,7 @@ const Product = require('../model/product');
 const Variant = require('../model/variant');
 const asyncHandler = require('express-async-handler');
 
+
 // Get all variant types
 router.get('/', asyncHandler(async (req, res) => {
     try {

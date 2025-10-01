@@ -5,7 +5,7 @@ const Product = require('../model/product');
 const multer = require('multer');
 const { uploadProduct } = require('../uploadFile');
 const asyncHandler = require('express-async-handler');
-const baseUrl = process.env.BASE_URL  ;
+const baseUrl = "http://localhost:3000"|| process.env.BASE_URL ;
 // Create new product - Updated to handle both Flutter (images array) and existing (image1-5) formats
 router.post('/', asyncHandler(async (req, res) => {
     try {
@@ -69,14 +69,21 @@ router.post('/', asyncHandler(async (req, res) => {
 
             // Handle existing image1-5 format (fallback)
             if (imageUrls.length === 0) {
-                const fields = ['image1', 'image2', 'image3', 'image4', 'image5'];
-                fields.forEach((field, index) => {
-                    if (req.files[field] && req.files[field].length > 0) {
-                        const file = req.files[field][0];
-                        const imageUrl = `${baseUrl}/image/products/${file.filename}`;
-                        imageUrls.push({ image: index + 1, url: imageUrl });
-                    }
-                });
+               // Handle existing image1-5 format (fallback)
+const fields = ['image1', 'image2', 'image3', 'image4', 'image5'];
+fields.forEach((field, index) => {
+    // Add null check for req.files
+    if (req.files && req.files[field] && req.files[field].length > 0) {
+        const file = req.files[field][0];
+        const imageUrl = `${baseUrl}/image/products/${file.filename}`;
+        let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));
+        if (imageEntry) {
+            imageEntry.url = imageUrl;
+        } else {
+            productToUpdate.images.push({ image: index + 1, url: imageUrl });
+        }
+    }
+});
             }
 
             console.log('🖼️ Processed images:', imageUrls);
@@ -189,22 +196,23 @@ router.put('/:id', asyncHandler(async (req, res) => {
             productToUpdate.sellerId = sellerId || productToUpdate.sellerId;
 
             // Handle Flutter's 'images' array format for updates
-            if (req.files && req.files['images']) {
-                req.files['images'].forEach((file, index) => {
-                    const imageUrl = `${baseUrl}/image/products/${file.filename}`;
-                    let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));
-                    if (imageEntry) {
-                        imageEntry.url = imageUrl;
-                    } else {
-                        productToUpdate.images.push({ image: index + 1, url: imageUrl });
-                    }
-                });
-            }
+            // Handle Flutter's 'images' array format for updates
+if (req.files && req.files['images']) {
+    req.files['images'].forEach((file, index) => {
+        const imageUrl = `${baseUrl}/image/products/${file.filename}`;
+        let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));
+        if (imageEntry) {
+            imageEntry.url = imageUrl;
+        } else {
+            productToUpdate.images.push({ image: index + 1, url: imageUrl });
+        }
+    });
+}
 
             // Handle existing image1-5 format (fallback)
             const fields = ['image1', 'image2', 'image3', 'image4', 'image5'];
             fields.forEach((field, index) => {
-                if (req.files[field] && req.files[field].length > 0) {
+                if (req.files && req.files[field] && req.files[field].length > 0) {
                     const file = req.files[field][0];
                     const imageUrl = `${baseUrl}/image/products/${file.filename}`;
                     let imageEntry = productToUpdate.images.find(img => img.image === (index + 1));

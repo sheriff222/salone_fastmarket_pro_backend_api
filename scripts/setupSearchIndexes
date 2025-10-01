@@ -1,0 +1,168 @@
+// scripts/setupSearchIndexes.js
+const mongoose = require('mongoose');
+const Product = require('../model/product');
+const Category = require('../model/category');
+const SubCategory = require('../model/subCategory');
+const Brand = require('../model/brand');
+const SearchHistory = require('../model/searchHistory');
+
+async function setupSearchIndexes() {
+    try {
+        console.log('Setting up search indexes...');
+        
+        // Product search indexes
+        await Product.collection.createIndex({
+            name: "text",
+            description: "text", 
+            sellerName: "text"
+        }, {
+            weights: {
+                name: 10,          // Product names are most important
+                description: 5,    // Descriptions are medium importance
+                sellerName: 3      // Seller names are lower importance
+            },
+            name: "product_search_index"
+        });
+        
+        // Additional product indexes for performance
+        await Product.collection.createIndex({ name: 1 });
+        await Product.collection.createIndex({ quantity: 1 });
+        await Product.collection.createIndex({ createdAt: -1 });
+        await Product.collection.createIndex({ proCategoryId: 1 });
+        await Product.collection.createIndex({ proSubCategoryId: 1 });
+        await Product.collection.createIndex({ proBrandId: 1 });
+        
+        // Category search indexes
+        await Category.collection.createIndex({ name: "text" }, { 
+            name: "category_search_index" 
+        });
+        await Category.collection.createIndex({ name: 1 });
+        
+        // SubCategory search indexes
+        await SubCategory.collection.createIndex({ name: "text" }, { 
+            name: "subcategory_search_index" 
+        });
+        await SubCategory.collection.createIndex({ name: 1 });
+        await SubCategory.collection.createIndex({ categoryId: 1 });
+        
+        // Brand search indexes
+        await Brand.collection.createIndex({ name: "text" }, { 
+            name: "brand_search_index" 
+        });
+        await Brand.collection.createIndex({ name: 1 });
+        await Brand.collection.createIndex({ subcategoryId: 1 });
+        
+        // Search history indexes (already defined in model but ensuring they exist)
+        await SearchHistory.collection.createIndex({ userId: 1, timestamp: -1 });
+        await SearchHistory.collection.createIndex({ query: "text" });
+        await SearchHistory.collection.createIndex(
+            { timestamp: 1 }, 
+            { expireAfterSeconds: 90 * 24 * 60 * 60 } // Auto-delete after 90 days
+        );
+        
+        console.log('✅ All search indexes created successfully');
+        
+        // Display index stats
+        const collections = [
+            { name: 'products', model: Product },
+            { name: 'categories', model: Category },
+            { name: 'subcategories', model: SubCategory },
+            { name: 'brands', model: Brand },
+            { name: 'search_history', model: SearchHistory }
+        ];
+        
+        for (const collection of collections) {
+            const indexes = await collection.model.collection.indexes();
+            console.log(`📊 ${collection.name.toUpperCase()} indexes:`, indexes.length);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error setting up search indexes:', error);
+    }
+}
+
+// Function to drop and recreate indexes if needed
+async function recreateSearchIndexes() {
+    try {
+        console.log('Recreating search indexes...');
+        
+        // Drop existing text indexes
+        try {
+            await Product.collection.dropIndex("product_search_index");
+            await Category.collection.dropIndex("category_search_index");
+            await SubCategory.collection.dropIndex("subcategory_search_index");
+            await Brand.collection.dropIndex("brand_search_index");
+        } catch (error) {
+            console.log('Note: Some indexes may not exist to drop');
+        }
+        
+        // Recreate indexes
+        await setupSearchIndexes();
+        
+    } catch (error) {
+        console.error('❌ Error recreating search indexes:', error);
+    }
+}
+
+// Function to check search performance
+async function testSearchPerformance() {
+    console.log('🧪 Testing search performance...');
+    
+    try {
+        const testQuery = 'phone';
+        const startTime = Date.now();
+        
+        const [products, categories] = await Promise.all([
+            Product.find({
+                $text: { $search: testQuery }
+            }, {
+                score: { $meta: "textScore" }
+            })
+            .sort({ score: { $meta: "textScore" } })
+            .limit(10)
+            .lean(),
+            
+            Category.find({
+                $text: { $search: testQuery }
+            })
+            .limit(5)
+            .lean()
+        ]);
+        
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        
+        console.log(`⚡ Search completed in ${duration}ms`);
+        console.log(`📱 Found ${products.length} products, ${categories.length} categories`);
+        
+        if (products.length > 0) {
+            console.log('🎯 Top result:', products[0].name);
+        }
+        
+    } catch (error) {
+        console.error('❌ Search performance test failed:', error);
+    }
+}
+
+module.exports = {
+    setupSearchIndexes,
+    recreateSearchIndexes,
+    testSearchPerformance
+};
+
+// Run setup if this file is executed directly
+if (require.main === module) {
+    const mongoUrl = process.env.MONGO_URL || 'mongodb://localhost:27017/sfm';
+    
+    mongoose.connect(mongoUrl)
+        .then(async () => {
+            console.log('📡 Connected to MongoDB');
+            await setupSearchIndexes();
+            await testSearchPerformance();
+            process.exit(0);
+        })
+        .catch((error) => {
+            console.error('❌ MongoDB connection error:', error);
+            process.exit(1);
+        });
+}

@@ -5,6 +5,7 @@ const Brand = require('../model/brand');
 const Product = require('../model/product');
 const asyncHandler = require('express-async-handler');
 
+
 // Get all sub-categories
 router.get('/', asyncHandler(async (req, res) => {
     try {
