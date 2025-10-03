@@ -76,10 +76,18 @@ const conversationSchema = new mongoose.Schema({
             enum: ['product_inquiry', 'general', 'support'],
             default: 'product_inquiry'
         }
-    }
+    },
+
+    deletedBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+}],
+isDeleted: {
+    type: Boolean,
+    default: false
+}
 }, { 
     timestamps: true,
-    // Add version key for schema migrations
     versionKey: '__v'
 });
 
