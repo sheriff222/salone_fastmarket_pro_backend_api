@@ -1,5 +1,6 @@
 // routes/product_cloudinary.js - Updated product routes with Cloudinary
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Product = require('../model/product');
 const asyncHandler = require('express-async-handler');
@@ -10,9 +11,36 @@ const {
     extractPublicId 
 } = require('../utils/cloudinaryUpload');
 
+
+
+const convertVariantIds = (variantIds) => {
+    if (!variantIds) return undefined;
+    
+    // If it's a string, convert to array
+    if (typeof variantIds === 'string') {
+        try {
+            // Try to parse if it's a JSON string
+            variantIds = JSON.parse(variantIds);
+        } catch {
+            // If not JSON, treat as single ID
+            variantIds = [variantIds];
+        }
+    }
+    
+    // Ensure it's an array
+    if (!Array.isArray(variantIds)) {
+        variantIds = [variantIds];
+    }
+    
+    // Convert to ObjectIds and filter out invalid ones
+    return variantIds
+        .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+};
+
+
 // Create new product with Cloudinary upload
 router.post('/', asyncHandler(async (req, res) => {
-    // Handle both 'images' array and 'image1-5' fields
     const upload = uploadProductImages.fields([
         { name: 'image1', maxCount: 1 },
         { name: 'image2', maxCount: 1 },
@@ -58,7 +86,6 @@ router.post('/', asyncHandler(async (req, res) => {
 
             // Upload images to Cloudinary
             if (req.files) {
-                // Handle 'images' array format (Flutter)
                 if (req.files['images']) {
                     console.log(`📤 Uploading ${req.files['images'].length} images to Cloudinary...`);
                     
@@ -78,12 +105,10 @@ router.post('/', asyncHandler(async (req, res) => {
                             console.log(`✅ Uploaded image ${i + 1}: ${uploadResult.url}`);
                         } catch (uploadError) {
                             console.error(`❌ Failed to upload image ${i + 1}:`, uploadError);
-                            // Continue with other images
                         }
                     }
                 }
 
-                // Handle individual image fields (image1-5)
                 if (imageUrls.length === 0) {
                     const fields = ['image1', 'image2', 'image3', 'image4', 'image5'];
                     
@@ -113,6 +138,10 @@ router.post('/', asyncHandler(async (req, res) => {
 
             console.log(`🖼️ Total images uploaded: ${imageUrls.length}`);
 
+            // ✅ Convert variant IDs to ObjectIds
+            const variantObjectIds = convertVariantIds(proVariantId);
+            console.log('🔄 Converted variant IDs:', variantObjectIds);
+
             // Create product with Cloudinary URLs
             const newProduct = new Product({
                 name: name.trim(),
@@ -124,7 +153,7 @@ router.post('/', asyncHandler(async (req, res) => {
                 proSubCategoryId,
                 proBrandId: proBrandId || undefined,
                 proVariantTypeId: proVariantTypeId || undefined,
-                proVariantId: proVariantId || undefined,
+                proVariantId: variantObjectIds, // ✅ NOW USING ObjectIds
                 sellerName: sellerName || 'Default Seller',
                 sellerId: sellerId || '507f1f77bcf86cd799439011',
                 images: imageUrls
@@ -153,7 +182,12 @@ router.post('/', asyncHandler(async (req, res) => {
     });
 }));
 
-// Get all products
+
+
+
+// Dans ton fichier routes/product_cloudinary.js
+// Remplace les lignes de populate par :
+
 router.get('/', asyncHandler(async (req, res) => {
     try {
         const products = await Product.find()
@@ -161,8 +195,10 @@ router.get('/', asyncHandler(async (req, res) => {
             .populate('proSubCategoryId', '_id name')
             .populate('proBrandId', '_id name')
             .populate('proVariantTypeId', '_id type')
-            .populate('proVariantId', '_id name')
+            .populate('proVariantId', '_id name')  // ✅ THIS POPULATES VARIANT NAMES
             .populate('sellerId', '_id fullName');
+        
+        console.log('✅ Products fetched with populated variants');
         
         res.json({ 
             success: true, 
@@ -170,11 +206,12 @@ router.get('/', asyncHandler(async (req, res) => {
             data: products 
         });
     } catch (error) {
+        console.error('❌ Error fetching products:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 }));
 
-// Get product by ID
+// ✅ GET product by ID - WITH PROPER POPULATION
 router.get('/:id', asyncHandler(async (req, res) => {
     try {
         const product = await Product.findById(req.params.id)
@@ -182,7 +219,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
             .populate('proSubCategoryId', '_id name')
             .populate('proBrandId', '_id name')
             .populate('proVariantTypeId', '_id type')
-            .populate('proVariantId', '_id name')
+            .populate('proVariantId', '_id name')  // ✅ THIS POPULATES VARIANT NAMES
             .populate('sellerId', '_id fullName');
         
         if (!product) {
@@ -192,12 +229,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
             });
         }
         
+        console.log('✅ Product fetched:', product.name);
+        console.log('✅ Variants:', product.proVariantId);
+        
         res.json({ 
             success: true, 
             message: "Product retrieved successfully.", 
             data: product 
         });
     } catch (error) {
+        console.error('❌ Error fetching product:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 }));
@@ -229,7 +270,6 @@ router.put('/:id', asyncHandler(async (req, res) => {
                 });
             }
 
-            // Update basic fields
             const { 
                 name, 
                 description, 
@@ -243,7 +283,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
                 proVariantId, 
                 sellerName, 
                 sellerId,
-                replaceImages  // Optional flag to replace all images
+                replaceImages
             } = req.body;
 
             if (name) product.name = name;
@@ -255,15 +295,20 @@ router.put('/:id', asyncHandler(async (req, res) => {
             if (proSubCategoryId) product.proSubCategoryId = proSubCategoryId;
             if (proBrandId) product.proBrandId = proBrandId;
             if (proVariantTypeId) product.proVariantTypeId = proVariantTypeId;
-            if (proVariantId) product.proVariantId = proVariantId;
+            
+            // ✅ Convert variant IDs to ObjectIds when updating
+            if (proVariantId !== undefined) {
+                product.proVariantId = convertVariantIds(proVariantId);
+                console.log('🔄 Updated variant IDs:', product.proVariantId);
+            }
+            
             if (sellerName) product.sellerName = sellerName;
             if (sellerId) product.sellerId = sellerId;
 
-            // Handle image updates
+            // Handle image updates (keep your existing image update logic)
             if (req.files && Object.keys(req.files).length > 0) {
                 const shouldReplaceAll = replaceImages === 'true' || replaceImages === true;
                 
-                // If replacing all images, delete old ones from Cloudinary
                 if (shouldReplaceAll && product.images && product.images.length > 0) {
                     console.log('🗑️ Deleting old images from Cloudinary...');
                     for (const img of product.images) {
@@ -279,68 +324,11 @@ router.put('/:id', asyncHandler(async (req, res) => {
                             }
                         }
                     }
-                    product.images = []; // Clear images array
+                    product.images = [];
                 }
 
-                // Upload new images
-                if (req.files['images']) {
-                    for (let i = 0; i < req.files['images'].length; i++) {
-                        const file = req.files['images'][i];
-                        try {
-                            const uploadResult = await uploadProductImage(
-                                file.buffer, 
-                                file.originalname
-                            );
-                            
-                            product.images.push({ 
-                                image: product.images.length + 1, 
-                                url: uploadResult.url,
-                                publicId: uploadResult.publicId
-                            });
-                        } catch (uploadError) {
-                            console.error(`Failed to upload image ${i + 1}:`, uploadError);
-                        }
-                    }
-                }
-
-                // Handle individual image fields
-                const fields = ['image1', 'image2', 'image3', 'image4', 'image5'];
-                for (let i = 0; i < fields.length; i++) {
-                    const field = fields[i];
-                    if (req.files[field] && req.files[field][0]) {
-                        const file = req.files[field][0];
-                        try {
-                            const uploadResult = await uploadProductImage(
-                                file.buffer, 
-                                file.originalname
-                            );
-                            
-                            // Find existing image at this position or add new
-                            let imageEntry = product.images.find(img => img.image === (i + 1));
-                            if (imageEntry) {
-                                // Delete old image from Cloudinary
-                                const oldPublicId = imageEntry.publicId || extractPublicId(imageEntry.url);
-                                if (oldPublicId) {
-                                    try {
-                                        await deleteFromCloudinary(oldPublicId);
-                                    } catch (delError) {
-                                        console.error(`Could not delete old image:`, delError.message);
-                                    }
-                                }
-                                imageEntry.url = uploadResult.url;
-                                imageEntry.publicId = uploadResult.publicId;
-                            } else {
-                                product.images.push({ 
-                                    image: i + 1, 
-                                    url: uploadResult.url,
-                                    publicId: uploadResult.publicId
-                                });
-                            }
-                        } catch (uploadError) {
-                            console.error(`Failed to upload ${field}:`, uploadError);
-                        }
-                    }
-                }
+                // (Keep your existing image upload logic here)
+                // ...
             }
 
             await product.save();

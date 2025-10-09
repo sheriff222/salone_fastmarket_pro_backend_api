@@ -10,6 +10,14 @@ const safeSerialize = (data) => JSON.parse(JSON.stringify(data));
 // Cache for frequently accessed data
 const NodeCache = require('node-cache');
 const cache = new NodeCache({ stdTTL: 300 }); // 5-minute cache
+const { analyticsLimiter } = require('../middleware/rateLimmiter');
+const {
+    extractIPAddress,
+    validateAnalyticsEvent,
+    sanitizeMetadata,
+    formatErrorResponse,
+    formatSuccessResponse
+} = require('../utils/analyticsHelper');
 
 /**
  * @route   GET /api/feed/complete
@@ -961,4 +969,219 @@ async function getProductReviewCount(productId) {
     return Math.floor(Math.random() * 50);
 }
 
+
+
+/**
+ * @route   POST /api/feed/track
+ * @desc    Track analytics events (views, clicks, favorites, etc.)
+ * @access  Public (no auth required)
+ */
+router.post('/track', analyticsLimiter, asyncHandler(async (req, res) => {
+    try {
+        const {
+            productId,
+            action,
+            userId = null,
+            metadata = {}
+        } = req.body;
+
+        // Validate event data
+        const validation = validateAnalyticsEvent({ productId, action, metadata });
+        if (!validation.valid) {
+            console.warn('⚠️ Invalid analytics event:', validation.errors);
+            return res.status(400).json(
+                formatErrorResponse('Invalid analytics event', validation.errors)
+            );
+        }
+
+        // Sanitize metadata to prevent injection
+        const sanitizedMetadata = sanitizeMetadata(metadata);
+
+        // Extract IP and user agent
+        const ipAddress = extractIPAddress(req);
+        const userAgent = req.headers['user-agent'] || 'unknown';
+
+        // Create analytics event
+        const analyticsEvent = new AnalyticsEvent({
+            productId,
+            action,
+            userId: userId || null, // null for guest users
+            metadata: sanitizedMetadata,
+            ipAddress,
+            userAgent,
+            timestamp: new Date()
+        });
+
+        // Save to database (fire-and-forget with error handling)
+        analyticsEvent.save()
+            .then(() => {
+                console.log(`✅ Analytics tracked: ${action} for product ${productId}`);
+            })
+            .catch((error) => {
+                // Don't fail the request if analytics save fails
+                console.error('❌ Analytics save error (non-critical):', error.message);
+            });
+
+        // Immediate success response (don't wait for DB save)
+        res.status(200).json(
+            formatSuccessResponse('Event tracked successfully', {
+                eventId: analyticsEvent._id,
+                action,
+                timestamp: analyticsEvent.timestamp
+            })
+        );
+
+    } catch (error) {
+        console.error('❌ Analytics tracking error:', error);
+        
+        // Return success even on error (silent fail for analytics)
+        // This prevents analytics failures from breaking user experience
+        res.status(200).json(
+            formatSuccessResponse('Event received', {
+                note: 'Event processing in background'
+            })
+        );
+    }
+}));
+
+/**
+ * @route   GET /api/feed/analytics/product/:productId
+ * @desc    Get analytics summary for a specific product
+ * @access  Public
+ */
+router.get('/analytics/product/:productId', asyncHandler(async (req, res) => {
+    try {
+        const { productId } = req.params;
+        const { days = 30 } = req.query;
+
+        const daysAgo = new Date();
+        daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+        // Aggregate analytics for the product
+        const analytics = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    productId: mongoose.Types.ObjectId(productId),
+                    timestamp: { $gte: daysAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: '$action',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // Format results
+        const summary = {
+            productId,
+            period: `${days} days`,
+            analytics: {}
+        };
+
+        analytics.forEach(item => {
+            summary.analytics[item._id] = item.count;
+        });
+
+        // Calculate total interactions
+        summary.totalInteractions = analytics.reduce((sum, item) => sum + item.count, 0);
+
+        res.json(
+            formatSuccessResponse('Product analytics retrieved', summary)
+        );
+
+    } catch (error) {
+        console.error('❌ Product analytics error:', error);
+        res.status(500).json(
+            formatErrorResponse('Failed to retrieve analytics', [error.message])
+        );
+    }
+}));
+
+/**
+ * @route   GET /api/feed/analytics/trending
+ * @desc    Get trending products based on analytics
+ * @access  Public
+ */
+router.get('/analytics/trending', asyncHandler(async (req, res) => {
+    try {
+        const { limit = 10, days = 7 } = req.query;
+
+        const daysAgo = new Date();
+        daysAgo.setDate(daysAgo.getDate() - parseInt(days));
+
+        // Get top products by interaction count
+        const trending = await AnalyticsEvent.aggregate([
+            {
+                $match: {
+                    timestamp: { $gte: daysAgo },
+                    action: { $in: ['view', 'click', 'favorite'] }
+                }
+            },
+            {
+                $group: {
+                    _id: '$productId',
+                    score: {
+                        $sum: {
+                            $switch: {
+                                branches: [
+                                    { case: { $eq: ['$action', 'view'] }, then: 1 },
+                                    { case: { $eq: ['$action', 'click'] }, then: 3 },
+                                    { case: { $eq: ['$action', 'favorite'] }, then: 5 }
+                                ],
+                                default: 1
+                            }
+                        }
+                    },
+                    views: {
+                        $sum: { $cond: [{ $eq: ['$action', 'view'] }, 1, 0] }
+                    },
+                    clicks: {
+                        $sum: { $cond: [{ $eq: ['$action', 'click'] }, 1, 0] }
+                    },
+                    favorites: {
+                        $sum: { $cond: [{ $eq: ['$action', 'favorite'] }, 1, 0] }
+                    }
+                }
+            },
+            { $sort: { score: -1 } },
+            { $limit: parseInt(limit) }
+        ]);
+
+        // Populate product details
+        const productIds = trending.map(t => t._id);
+        const products = await Product.find({ _id: { $in: productIds } })
+            .populate('proCategoryId', 'name')
+            .populate('sellerId', 'fullName')
+            .lean();
+
+        // Merge analytics with product data
+        const trendingProducts = trending.map(trend => {
+            const product = products.find(p => p._id.toString() === trend._id.toString());
+            return {
+                ...product,
+                analytics: {
+                    score: trend.score,
+                    views: trend.views,
+                    clicks: trend.clicks,
+                    favorites: trend.favorites
+                }
+            };
+        }).filter(p => p._id); // Filter out missing products
+
+        res.json(
+            formatSuccessResponse('Trending products retrieved', {
+                products: trendingProducts,
+                period: `${days} days`
+            })
+        );
+
+    } catch (error) {
+        console.error('❌ Trending analytics error:', error);
+        res.status(500).json(
+            formatErrorResponse('Failed to retrieve trending products', [error.message])
+        );
+    }
+}));
 module.exports = router;

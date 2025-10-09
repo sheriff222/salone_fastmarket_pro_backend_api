@@ -39,7 +39,10 @@ const productSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'VariantType'
     },
-    proVariantId: [String],
+    proVariantId: [{
+        type: mongoose.Schema.Types.ObjectId,  // ✅ CHANGED: Now ObjectId
+        ref: 'Variant'                         // ✅ ADDED: Reference to Variant model
+    }],
     sellerId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -57,6 +60,9 @@ const productSchema = new mongoose.Schema({
         url: {
             type: String,
             required: true
+        },
+        publicId: {  // ✅ GOOD: You already have this for Cloudinary
+            type: String
         }
     }]
 }, { timestamps: true });

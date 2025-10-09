@@ -395,6 +395,10 @@ router.post('/:messageId/upload',
 
 // Send text message
 router.post('/text', asyncHandler(async (req, res) => {
+    console.log('📥 Raw body:', req.body);
+   console.log('📥 Body type:', typeof req.body);
+   console.log('📥 Content-Type header:', req.headers['content-type']);
+   console.log('📥 Keys in body:', Object.keys(req.body || {}));
     const { conversationId, senderId, text, replyToMessageId } = req.body;
 
     if (!conversationId || !senderId || !text || text.trim() === '') {

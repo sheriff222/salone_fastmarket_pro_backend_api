@@ -6,188 +6,158 @@ const asyncHandler = require('express-async-handler');
 
 // Get reviews for a product with pagination
 router.get('/product/:productId', asyncHandler(async (req, res) => {
-    const { page = 1, limit = 5 } = req.query;
-    const skip = (page - 1) * limit;
-    
-    try {
-        // Get paginated reviews
-        const reviews = await Review.find({ productId: req.params.productId })
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
-        
-        // Get total count and calculate hasMore
-        const totalReviews = await Review.countDocuments({ productId: req.params.productId });
-        const hasMore = skip + reviews.length < totalReviews;
-        
-        // Calculate average rating from ALL reviews (not just current page)
-        const allReviews = await Review.find({ productId: req.params.productId });
-        const avgRating = totalReviews > 0 
-            ? allReviews.reduce((sum, review) => sum + review.rating, 0) / totalReviews
-            : 0;
-        
-        // Calculate rating distribution from ALL reviews
-        const ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-        allReviews.forEach(review => {
-            if (review.rating >= 1 && review.rating <= 5) {
-                ratingDistribution[review.rating]++;
-            }
-        });
-        
-        res.json({ 
-            success: true, 
-            data: { 
-                reviews, 
-                avgRating: Math.round(avgRating * 10) / 10,
-                totalReviews,
-                ratingDistribution
-            },
-            hasMore,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(totalReviews / parseInt(limit))
-        });
-        
-    } catch (error) {
-        console.error('Error fetching product reviews:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to fetch reviews',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
+  const { page = 1, limit = 5 } = req.query;
+  const skip = (page - 1) * limit;
+  
+  const reviews = await Review.find({ productId: req.params.productId })
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+  
+  const totalReviews = await Review.countDocuments({ 
+    productId: req.params.productId 
+  });
+  
+  const allReviews = await Review.find({ productId: req.params.productId });
+  const avgRating = totalReviews > 0 
+    ? allReviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+    : 0;
+  
+  const ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  allReviews.forEach(r => {
+    if (r.rating >= 1 && r.rating <= 5) {
+      ratingDistribution[r.rating]++;
     }
+  });
+  
+  res.json({ 
+    success: true, 
+    data: { 
+      reviews, 
+      avgRating: Math.round(avgRating * 10) / 10,
+      totalReviews,
+      ratingDistribution
+    },
+    hasMore: skip + reviews.length < totalReviews,
+    currentPage: parseInt(page),
+    totalPages: Math.ceil(totalReviews / parseInt(limit))
+  });
 }));
 
 // Add/Update review
 router.post('/', asyncHandler(async (req, res) => {
-    const { userId, productId, rating, comment, buyerName } = req.body;
+  const { userId, productId, rating, comment, buyerName } = req.body;
+  
+  if (!userId || !productId || !rating || !comment || !buyerName) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "All fields required: userId, productId, rating, comment, buyerName" 
+    });
+  }
+  
+  if (typeof rating !== 'number' || rating < 1 || rating > 5) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Rating must be between 1 and 5" 
+    });
+  }
+  
+  const existingReview = await Review.findOne({ userId, productId });
+  
+  if (existingReview) {
+    existingReview.rating = rating;
+    existingReview.comment = comment.trim();
+    existingReview.buyerName = buyerName.trim();
+    await existingReview.save();
     
-    // Validation
-    if (!userId || !productId || !rating || !comment || !buyerName) {
-        return res.status(400).json({ 
-            success: false, 
-            message: "All fields are required: userId, productId, rating, comment, buyerName" 
-        });
-    }
+    // Track review update
+    await trackReviewEvent(userId, productId, 'review_updated', { rating });
     
-    if (typeof rating !== 'number' || rating < 1 || rating > 5) {
-        return res.status(400).json({ 
-            success: false, 
-            message: "Rating must be a number between 1 and 5" 
-        });
-    }
+    res.json({ 
+      success: true, 
+      message: "Review updated successfully",
+      data: existingReview
+    });
+  } else {
+    const review = new Review({ 
+      userId, 
+      productId, 
+      rating, 
+      comment: comment.trim(), 
+      buyerName: buyerName.trim() 
+    });
+    await review.save();
     
-    if (typeof comment !== 'string' || comment.trim().length < 10 || comment.trim().length > 500) {
-        return res.status(400).json({ 
-            success: false, 
-            message: "Comment must be between 10 and 500 characters" 
-        });
-    }
+    // Track new review
+    await trackReviewEvent(userId, productId, 'review_added', { rating });
     
-    try {
-        // Check if user already has a review for this product
-        const existingReview = await Review.findOne({ userId, productId });
-        
-        if (existingReview) {
-            // Update existing review
-            existingReview.rating = rating;
-            existingReview.comment = comment.trim();
-            existingReview.buyerName = buyerName.trim();
-            await existingReview.save();
-            
-            res.json({ 
-                success: true, 
-                message: "Review updated successfully",
-                data: existingReview
-            });
-        } else {
-            // Create new review
-            const review = new Review({ 
-                userId, 
-                productId, 
-                rating, 
-                comment: comment.trim(), 
-                buyerName: buyerName.trim() 
-            });
-            await review.save();
-            
-            res.json({ 
-                success: true, 
-                message: "Review added successfully",
-                data: review
-            });
-        }
-        
-    } catch (error) {
-        console.error('Error adding/updating review:', error);
-        
-        if (error.code === 11000) {
-            // Duplicate key error
-            res.status(400).json({ 
-                success: false, 
-                message: "You have already reviewed this product" 
-            });
-        } else {
-            res.status(500).json({ 
-                success: false, 
-                message: "Failed to save review",
-                error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-            });
-        }
-    }
+    res.json({ 
+      success: true, 
+      message: "Review added successfully",
+      data: review
+    });
+  }
 }));
 
-// Get user's review for a product
-router.get('/user/:userId/product/:productId', asyncHandler(async (req, res) => {
-    try {
-        const review = await Review.findOne({ 
-            userId: req.params.userId, 
-            productId: req.params.productId 
-        });
-        
-        res.json({ 
-            success: true, 
-            data: review // Will be null if not found, which is fine
-        });
-        
-    } catch (error) {
-        console.error('Error fetching user review:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: "Failed to fetch user review",
-            data: null,
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
-    }
-}));
-
-// Delete review
+// Delete review with analytics
 router.delete('/:reviewId', asyncHandler(async (req, res) => {
-    try {
-        const review = await Review.findById(req.params.reviewId);
-        
-        if (!review) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Review not found" 
-            });
-        }
-        
-        await Review.findByIdAndDelete(req.params.reviewId);
-        
-        res.json({ 
-            success: true, 
-            message: "Review deleted successfully" 
-        });
-        
-    } catch (error) {
-        console.error('Error deleting review:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: "Failed to delete review",
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
-    }
+  const review = await Review.findById(req.params.reviewId);
+  
+  if (!review) {
+    return res.status(404).json({ 
+      success: false, 
+      message: "Review not found" 
+    });
+  }
+  
+  // Track deletion
+  await trackReviewEvent(
+    review.userId, 
+    review.productId, 
+    'review_deleted', 
+    { rating: review.rating }
+  );
+  
+  await Review.findByIdAndDelete(req.params.reviewId);
+  
+  res.json({ 
+    success: true, 
+    message: "Review deleted successfully" 
+  });
 }));
+
+// Get user's review
+router.get('/user/:userId/product/:productId', asyncHandler(async (req, res) => {
+  const review = await Review.findOne({ 
+    userId: req.params.userId, 
+    productId: req.params.productId 
+  });
+  
+  res.json({ 
+    success: true, 
+    data: review
+  });
+}));
+
+// Helper: Track review events
+async function trackReviewEvent(userId, productId, action, metadata) {
+  try {
+    await AnalyticsEvent.create({
+      userId,
+      productId,
+      action,
+      metadata: {
+        ...metadata,
+        source: 'review'
+      },
+      timestamp: new Date()
+    });
+  } catch (error) {
+    console.error('Review analytics error:', error);
+  }
+}
+// Delete review
+
 
 // Get similar products
 router.get('/similar/:productId', asyncHandler(async (req, res) => {
