@@ -100,6 +100,7 @@ router.post('/conversations', asyncHandler(async (req, res) => {
 }));
 
 // Get conversations by user role
+// Get conversations by user role (UPDATE EXISTING ROUTE)
 router.get('/conversations/user/:userId', asyncHandler(async (req, res) => {
     const { userId } = req.params;
     const { role } = req.query;
@@ -112,6 +113,12 @@ router.get('/conversations/user/:userId', asyncHandler(async (req, res) => {
     }
 
     const query = role === 'buyer' ? { buyerId: userId } : { sellerId: userId };
+    
+    // ✅ ADD THIS: Filter out conversations deleted by this user
+    query.$or = [
+        { deletedBy: { $nin: [userId] } },  // Not in deletedBy array
+        { deletedBy: { $exists: false } }    // deletedBy doesn't exist
+    ];
 
     const conversations = await Conversation.find(query)
         .populate([
@@ -146,6 +153,8 @@ router.get('/conversations/user/:userId', asyncHandler(async (req, res) => {
         data: formattedConversations 
     });
 }));
+
+
 
 // Get messages in conversation
 router.get('/conversations/:conversationId/messages', asyncHandler(async (req, res) => {
@@ -736,6 +745,138 @@ router.delete('/:messageId', asyncHandler(async (req, res) => {
         success: true, 
         message: "Message deleted successfully." 
     });
+}));
+
+// ============================================================================
+// DELETE CONVERSATION (Soft Delete)
+// ============================================================================
+
+// Delete conversation (soft delete - per user)
+router.delete('/conversations/:conversationId', asyncHandler(async (req, res) => {
+    const { conversationId } = req.params;
+    const { userId } = req.query;
+
+    console.log('🗑️ Delete conversation request:', { conversationId, userId });
+
+    // Validate inputs
+    if (!userId) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "userId is required in query parameters." 
+        });
+    }
+
+    // Find conversation
+    const conversation = await Conversation.findById(conversationId).populate([
+        { path: 'buyerId', select: 'fullName phoneNumber accountType' },
+        { path: 'sellerId', select: 'fullName phoneNumber accountType' }
+    ]);
+    
+    if (!conversation) {
+        return res.status(404).json({ 
+            success: false, 
+            message: "Conversation not found." 
+        });
+    }
+
+    // Validate user permission
+    const validation = conversation.validateUserPermission(userId);
+    if (!validation.valid) {
+        return res.status(403).json({ 
+            success: false, 
+            message: "Unauthorized to delete this conversation." 
+        });
+    }
+
+    try {
+        // Add user to deletedBy array if not already there
+        if (!conversation.deletedBy.includes(userId)) {
+            conversation.deletedBy.push(userId);
+        }
+
+        // Check if both participants have deleted the conversation
+        const totalParticipants = conversation.participants?.length || 2;
+        const bothDeleted = conversation.deletedBy.length >= totalParticipants;
+
+        if (bothDeleted) {
+            // Mark as fully deleted when both users delete it
+            conversation.isDeleted = true;
+            
+            // Optional: Delete all messages in this conversation from Cloudinary
+            // Uncomment if you want to clean up media files
+            
+            const messages = await Message.find({ 
+                conversationId,
+                'content.publicId': { $exists: true }
+            });
+
+            for (const message of messages) {
+                if (message.content?.publicId) {
+                    try {
+                        const resourceType = message.messageType === 'video' ? 'video' : 
+                                           message.messageType === 'voice' ? 'video' :
+                                           message.messageType === 'document' ? 'raw' : 'image';
+                        await deleteFromCloudinary(message.content.publicId, resourceType);
+                    } catch (delError) {
+                        console.error('Could not delete media from Cloudinary:', delError);
+                    }
+                }
+            }
+
+            console.log(`✅ Conversation ${conversationId} fully deleted by both users`);
+        } else {
+            console.log(`✅ Conversation ${conversationId} deleted for user ${userId} (${conversation.deletedBy.length}/${totalParticipants})`);
+        }
+
+        await conversation.save();
+
+        // Emit socket event to notify participants
+        const socketIO = getIO();
+        if (socketIO) {
+            // Notify the user who deleted
+            socketIO.to(userId.toString()).emit('conversation_deleted', {
+                conversationId: conversation._id,
+                userId: userId,
+                deletedAt: new Date().toISOString(),
+                fullyDeleted: bothDeleted
+            });
+
+            // If fully deleted, notify other participant too
+            if (bothDeleted) {
+                conversation.participants.forEach((participantId) => {
+                    if (participantId.toString() !== userId.toString()) {
+                        socketIO.to(participantId.toString()).emit('conversation_deleted', {
+                            conversationId: conversation._id,
+                            userId: userId,
+                            deletedAt: new Date().toISOString(),
+                            fullyDeleted: true
+                        });
+                    }
+                });
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            message: bothDeleted 
+                ? "Conversation permanently deleted." 
+                : "Conversation deleted for you.",
+            data: {
+                conversationId: conversation._id,
+                deletedBy: conversation.deletedBy,
+                isDeleted: conversation.isDeleted,
+                deletedForUser: true,
+                fullyDeleted: bothDeleted
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error deleting conversation:', error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to delete conversation: " + error.message
+        });
+    }
 }));
 
 module.exports = router;

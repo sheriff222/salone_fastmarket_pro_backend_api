@@ -30,6 +30,34 @@ const io = socketIO(server, {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
+  socket.on('delete_conversation', async (data) => {
+    try {
+        const { conversationId, userId } = data;
+
+        console.log(`🗑️ Socket: User ${userId} deleting conversation ${conversationId}`);
+
+        // Broadcast to other participants
+        const conversation = await Conversation.findById(conversationId);
+        if (conversation) {
+            conversation.participants.forEach((participantId) => {
+                if (participantId.toString() !== userId) {
+                    io.to(participantId.toString()).emit('conversation_deleted', {
+                        conversationId,
+                        userId,
+                        timestamp: new Date().toISOString(),
+                    });
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Delete conversation socket error:', error);
+        socket.emit('error', { 
+            action: 'delete_conversation',
+            error: error.message 
+        });
+    }
+});
+
   // Store user ID from handshake
   const userId = socket.handshake.headers.userid || socket.handshake.query.userId;
   socket.userId = userId;
