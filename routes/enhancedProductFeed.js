@@ -9,7 +9,13 @@ const asyncHandler = require('express-async-handler');
 const safeSerialize = (data) => JSON.parse(JSON.stringify(data));
 // Cache for frequently accessed data
 const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 300 }); // 5-minute cache
+const cache = new NodeCache({ stdTTL: 120 }); // 5-minute cache
+
+const feedCache = new NodeCache({ stdTTL: 60 });
+const categoryCache = new NodeCache({ stdTTL: 120 });
+
+
+
 const { analyticsLimiter } = require('../middleware/rateLimmiter');
 const {
     extractIPAddress,
@@ -28,187 +34,140 @@ const {
 
 
 router.get('/complete', asyncHandler(async (req, res) => {
+  const startTime = Date.now();
   const {
     userId = null,
-    analytics = 'true',
-    includeMixed = 'true',
+    analytics = 'false', // ✅ CHANGED: Default to false for speed
     page = 1,
   } = req.query;
 
-  const useAnalytics = analytics === 'true';
-  const includeMixedSponsored = includeMixed === 'true';
   const pageNum = parseInt(page);
-  const cacheKey = `complete_feed_${userId || 'guest'}_${useAnalytics}_${includeMixedSponsored}_${pageNum}`;
+  const cacheKey = `complete_feed_${userId || 'guest'}_${pageNum}`;
 
-  // 1️⃣ Check cache first
-  const cachedData = cache.get(cacheKey);
+  // ✅ CHECK CACHE FIRST (instant if cached)
+  const cachedData = feedCache.get(cacheKey);
   if (cachedData) {
+    console.log(`⚡ Cache hit! Served in ${Date.now() - startTime}ms`);
     return res.json({
       success: true,
-      message: 'Complete feed retrieved successfully (cached)',
+      message: 'Feed retrieved from cache',
       data: cachedData,
     });
   }
 
   try {
-    // 2️⃣ Fetch only lightweight sections first (instant load)
+    // ✅ PARALLEL QUERIES - All run at once (not sequential!)
     const [
       sponsoredProducts,
-      recentlyAdded,
+      recentProducts,
       categoriesWithProducts
     ] = await Promise.all([
-      getSponsoredSection(3, false), // minimal number, skip analytics
-      getRecentlyAddedSection(6, false, pageNum), // skip analytics
-      getCategoriesWithTopProducts(4, null, pageNum) // skip analytics
+      // Get 6 sponsored products (light query, no analytics)
+      SponsoredProduct.find({
+        isActive: true,
+        status: 'active',
+        startDate: { $lte: new Date() },
+        endDate: { $gte: new Date() },
+      })
+        .populate({
+          path: 'productId',
+          select: 'name price offerPrice images quantity proCategoryId sellerId',
+          match: { quantity: { $gt: 0 } },
+          populate: [
+            { path: 'proCategoryId', select: 'name' },
+            { path: 'sellerId', select: 'fullName' }
+          ]
+        })
+        .sort({ priority: -1 })
+        .limit(6)
+        .lean(),
+
+      // Get 8 recent products (light query)
+      Product.find({ quantity: { $gt: 0 } })
+        .select('name price offerPrice images quantity proCategoryId sellerId createdAt')
+        .populate('proCategoryId', 'name')
+        .populate('sellerId', 'fullName')
+        .sort({ createdAt: -1 })
+        .limit(8)
+        .lean(),
+
+      // Get 3 categories with 6 products each (light query)
+      getCategoriesWithProductsFast(6, 3)
     ]);
 
-    const initialSections = [
-      {
+    // ✅ BUILD SECTIONS (minimal processing)
+    const sections = [];
+
+    // Sponsored Section
+    const validSponsored = sponsoredProducts
+      .filter(s => s.productId)
+      .map(s => ({ ...s.productId, isSponsored: true }));
+
+    if (validSponsored.length > 0) {
+      sections.push({
         sectionId: 'sponsored',
         title: 'Sponsored Products',
         type: 'sponsored',
-        products: sponsoredProducts,
-        showMore: sponsoredProducts.length >= 3,
-      },
-      {
-        sectionId: 'recently_added',
-        title: 'Recently Added',
-        type: 'recent',
-        products: recentlyAdded,
-        showMore: recentlyAdded.length >= 6,
-      }
-    ];
-
-    if (categoriesWithProducts.categories) {
-      categoriesWithProducts.categories.forEach((catData) => {
-        initialSections.push({
-          sectionId: `category_${catData.category._id}`,
-          title: catData.category.name,
-          type: 'category',
-          categoryId: catData.category._id,
-          products: catData.products.map((product) => {
-            delete product.address;
-            return product;
-          }),
-          showMore: catData.products.length >= 4,
-        });
+        products: validSponsored,
+        showMore: false, // No "see more" for sponsored
       });
     }
 
-    // 3️⃣ Send initial response immediately (fast!)
-    res.json({
-      success: true,
-      message: 'Feed retrieved quickly. Analytics loading in background...',
-      data: {
-        sections: initialSections,
-        metadata: {
-          totalSections: initialSections.length,
-          hasMixedSponsored: includeMixedSponsored,
-          generatedAt: new Date(),
-          userId: userId || 'guest',
-          page: pageNum,
-        },
-      }
-    });
-
-    // 4️⃣ Enrich remaining sections with analytics in the background
-    if (useAnalytics) {
-      (async () => {
-        try {
-          const [
-            todaysPicks,
-            recommended,
-            trending
-          ] = await Promise.all([
-            getTodaysPicksSection(5, true),
-            userId ? getRecommendedProducts(userId, 5, true) : getRandomProducts(5),
-            getTrendingProducts(5, true)
-          ]);
-
-          // Combine all sections
-          const allSections = [
-            ...initialSections,
-            {
-              sectionId: 'todays_picks',
-              title: "Today's Picks",
-              type: 'curated',
-              products: todaysPicks,
-              showMore: todaysPicks.length >= 5,
-            },
-            {
-              sectionId: 'recommended',
-              title: 'Just For You',
-              type: 'personalized',
-              products: recommended,
-              showMore: recommended.length >= 5,
-            },
-            {
-              sectionId: 'trending',
-              title: 'Trending Now',
-              type: 'trending',
-              products: trending,
-              showMore: trending.length >= 5,
-            }
-          ];
-
-          // Shuffle sections for variety
-          const shuffledSections = shuffleArray([...allSections]);
-
-          // Mix sponsored products if requested
-          if (includeMixedSponsored && sponsoredProducts.length > 0) {
-            shuffledSections.forEach((section) => {
-              if (section.type !== 'sponsored' && section.products.length > 0) {
-                const sponsoredToMix = sponsoredProducts
-                  .sort(() => 0.5 - Math.random())
-                  .slice(0, Math.random() > 0.5 ? 2 : 1);
-
-                sponsoredToMix.forEach((sponsoredProduct) => {
-                  const randomIndex = Math.floor(Math.random() * (section.products.length + 1));
-                  section.products.splice(randomIndex, 0, {
-                    ...sponsoredProduct,
-                    isSponsored: true,
-                    originalSection: section.sectionId,
-                  });
-                });
-              }
-            });
-          }
-
-          // Cache the fully enriched feed
-          cache.set(cacheKey, safeSerialize({
-            sections: shuffledSections,
-            metadata: {
-              totalSections: shuffledSections.length,
-              hasMixedSponsored: includeMixedSponsored,
-              generatedAt: new Date(),
-              userId: userId || 'guest',
-              page: pageNum,
-            }
-          }));
-
-        } catch (error) {
-          console.error('Background feed enrichment error:', error);
-        }
-      })();
+    // Recent Section
+    if (recentProducts.length > 0) {
+      sections.push({
+        sectionId: 'recently_added',
+        title: 'Recently Added',
+        type: 'recent',
+        products: recentProducts,
+        showMore: true, // ✅ Enable "See More"
+      });
     }
 
-  } catch (error) {
-    console.error('Error retrieving feed:', error);
+    // Category Sections
+    categoriesWithProducts.forEach(catData => {
+      sections.push({
+        sectionId: `category_${catData.category._id}`,
+        title: catData.category.name,
+        type: 'category',
+        categoryId: catData.category._id.toString(),
+        products: catData.products,
+        showMore: catData.hasMore, // ✅ TRUE if more products exist
+      });
+    });
+
+    const responseData = {
+      sections,
+      metadata: {
+        totalSections: sections.length,
+        generatedAt: new Date(),
+        userId: userId || 'guest',
+        page: pageNum,
+        loadTimeMs: Date.now() - startTime
+      }
+    };
+
+    // ✅ CACHE FOR 60 SECONDS
+    feedCache.set(cacheKey, safeSerialize(responseData));
+
+    console.log(`✅ Feed loaded in ${Date.now() - startTime}ms`);
+
     res.json({
       success: true,
-      message: 'Error retrieving feed, showing lightweight data',
-      data: {
-        sections: [],
-        metadata: {
-          totalSections: 0,
-          hasMixedSponsored: false,
-          userId: userId || 'guest',
-          page: pageNum
-        }
-      }
+      message: 'Feed retrieved successfully',
+      data: responseData
+    });
+
+  } catch (error) {
+    console.error('❌ Feed error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading feed',
+      error: error.message
     });
   }
 }));
+
 
 /**
  * @route   GET /api/feed/section/:sectionName
@@ -288,6 +247,76 @@ router.get('/section/:sectionName', asyncHandler(async (req, res) => {
         });
     }
 }));
+
+
+
+/**
+ * @route   GET /api/feed/section/:sectionType/all
+ * @desc    Get ALL products for a section (for "See More")
+ * @access  Public
+ */
+router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
+  const { sectionType } = req.params;
+  const { 
+    categoryId = null, 
+    page = 1, 
+    limit = 10 
+  } = req.query;
+
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const skip = (pageNum - 1) * limitNum;
+
+  try {
+    let query = { quantity: { $gt: 0 } };
+    let sortCriteria = { createdAt: -1 };
+
+    // ✅ CATEGORY-SPECIFIC QUERY
+    if (sectionType === 'category' && categoryId) {
+      query.proCategoryId = categoryId;
+    }
+
+    // ✅ FETCH PRODUCTS + TOTAL COUNT (parallel)
+    const [products, totalCount] = await Promise.all([
+      Product.find(query)
+        .select('name price offerPrice images quantity proCategoryId sellerId')
+        .populate('proCategoryId', 'name')
+        .populate('sellerId', 'fullName')
+        .sort(sortCriteria)
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      
+      Product.countDocuments(query)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    res.json({
+      success: true,
+      message: `${sectionType} products retrieved`,
+      data: products,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalProducts: totalCount,
+        hasMore: pageNum < totalPages,
+        limit: limitNum
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Section load error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading section products',
+      error: error.message
+    });
+  }
+}));
+
+
+
 
 /**
  * @route   GET /api/feed/categories
@@ -1005,79 +1034,95 @@ async function getProductReviewCount(productId) {
     return Math.floor(Math.random() * 50);
 }
 
+async function getCategoriesWithProductsFast(productsPerCategory, maxCategories) {
+  // Check cache first
+  const cacheKey = `categories_${productsPerCategory}_${maxCategories}`;
+  const cached = categoryCache.get(cacheKey);
+  if (cached) return cached;
 
+  try {
+    // Get top categories
+    const categories = await Category.find()
+      .limit(maxCategories)
+      .lean();
+
+    // Parallel fetch products for each category
+    const categoryPromises = categories.map(async (category) => {
+      const [products, totalCount] = await Promise.all([
+        Product.find({ 
+          proCategoryId: category._id,
+          quantity: { $gt: 0 }
+        })
+          .select('name price offerPrice images quantity proCategoryId sellerId')
+          .populate('proCategoryId', 'name')
+          .populate('sellerId', 'fullName')
+          .sort({ createdAt: -1 })
+          .limit(productsPerCategory)
+          .lean(),
+        
+        Product.countDocuments({ 
+          proCategoryId: category._id,
+          quantity: { $gt: 0 }
+        })
+      ]);
+
+      return {
+        category,
+        products,
+        hasMore: totalCount > productsPerCategory, // ✅ TRUE if more exist
+        totalCount
+      };
+    });
+
+    const categoriesWithProducts = await Promise.all(categoryPromises);
+    
+    // Filter out empty categories
+    const validCategories = categoriesWithProducts.filter(c => c.products.length > 0);
+
+    // Cache for 2 minutes
+    categoryCache.set(cacheKey, validCategories);
+
+    return validCategories;
+
+  } catch (error) {
+    console.error('❌ Categories fetch error:', error);
+    return [];
+  }
+}
 
 /**
  * @route   POST /api/feed/track
  * @desc    Track analytics events (views, clicks, favorites, etc.)
  * @access  Public (no auth required)
  */
-router.post('/track', analyticsLimiter, asyncHandler(async (req, res) => {
+router.post('/track', asyncHandler(async (req, res) => {
+  // ✅ IMMEDIATE RESPONSE (don't wait for DB)
+  res.status(200).json({
+    success: true,
+    message: 'Event tracked'
+  });
+
+  // ✅ SAVE IN BACKGROUND (async, no await)
+  const { productId, action, userId = null, metadata = {} } = req.body;
+
+  setImmediate(async () => {
     try {
-        const {
-            productId,
-            action,
-            userId = null,
-            metadata = {}
-        } = req.body;
+      const analyticsEvent = new AnalyticsEvent({
+        productId,
+        action,
+        userId,
+        metadata,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date()
+      });
 
-        // Validate event data
-        const validation = validateAnalyticsEvent({ productId, action, metadata });
-        if (!validation.valid) {
-            console.warn('⚠️ Invalid analytics event:', validation.errors);
-            return res.status(400).json(
-                formatErrorResponse('Invalid analytics event', validation.errors)
-            );
-        }
-
-        // Sanitize metadata to prevent injection
-        const sanitizedMetadata = sanitizeMetadata(metadata);
-
-        // Extract IP and user agent
-        const ipAddress = extractIPAddress(req);
-        const userAgent = req.headers['user-agent'] || 'unknown';
-
-        // Create analytics event
-        const analyticsEvent = new AnalyticsEvent({
-            productId,
-            action,
-            userId: userId || null, // null for guest users
-            metadata: sanitizedMetadata,
-            ipAddress,
-            userAgent,
-            timestamp: new Date()
-        });
-
-        // Save to database (fire-and-forget with error handling)
-        analyticsEvent.save()
-            .then(() => {
-                console.log(`✅ Analytics tracked: ${action} for product ${productId}`);
-            })
-            .catch((error) => {
-                // Don't fail the request if analytics save fails
-                console.error('❌ Analytics save error (non-critical):', error.message);
-            });
-
-        // Immediate success response (don't wait for DB save)
-        res.status(200).json(
-            formatSuccessResponse('Event tracked successfully', {
-                eventId: analyticsEvent._id,
-                action,
-                timestamp: analyticsEvent.timestamp
-            })
-        );
-
+      await analyticsEvent.save();
+      console.log(`📊 Analytics saved: ${action} for ${productId}`);
     } catch (error) {
-        console.error('❌ Analytics tracking error:', error);
-        
-        // Return success even on error (silent fail for analytics)
-        // This prevents analytics failures from breaking user experience
-        res.status(200).json(
-            formatSuccessResponse('Event received', {
-                note: 'Event processing in background'
-            })
-        );
+      console.error('❌ Analytics save error (non-critical):', error.message);
     }
+  });
 }));
 
 /**
