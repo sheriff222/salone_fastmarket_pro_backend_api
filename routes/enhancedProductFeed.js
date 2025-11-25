@@ -24,6 +24,9 @@ const {
  * @desc    Get complete feed with all sections in random order
  * @access  Public
  */
+
+
+
 router.get('/complete', asyncHandler(async (req, res) => {
   const {
     userId = null,
@@ -35,52 +38,37 @@ router.get('/complete', asyncHandler(async (req, res) => {
   const useAnalytics = analytics === 'true';
   const includeMixedSponsored = includeMixed === 'true';
   const pageNum = parseInt(page);
+  const cacheKey = `complete_feed_${userId || 'guest'}_${useAnalytics}_${includeMixedSponsored}_${pageNum}`;
+
+  // 1️⃣ Check cache first
+  const cachedData = cache.get(cacheKey);
+  if (cachedData) {
+    return res.json({
+      success: true,
+      message: 'Complete feed retrieved successfully (cached)',
+      data: cachedData,
+    });
+  }
 
   try {
-    const cacheKey = `complete_feed_${userId || 'guest'}_${useAnalytics}_${includeMixedSponsored}_${pageNum}`;
-
-    // Check cache first
-    const cachedData = cache.get(cacheKey);
-    if (cachedData) {
-      return res.json({
-        success: true,
-        message: 'Complete feed retrieved successfully (cached)',
-        data: cachedData,
-      });
-    }
-
-    // Get all sections
+    // 2️⃣ Fetch only lightweight sections first (instant load)
     const [
       sponsoredProducts,
-      todaysPicks,
       recentlyAdded,
-      recommended,
-      trending,
-      categoriesWithProducts,
+      categoriesWithProducts
     ] = await Promise.all([
-      getSponsoredSection(6, useAnalytics),
-      getTodaysPicksSection(5, useAnalytics),
-      getRecentlyAddedSection(6, useAnalytics, pageNum),
-      getRecommendedProducts(userId, 5, useAnalytics),
-      getTrendingProducts(5, useAnalytics),
-      getCategoriesWithTopProducts(4, userId, pageNum),
+      getSponsoredSection(3, false), // minimal number, skip analytics
+      getRecentlyAddedSection(6, false, pageNum), // skip analytics
+      getCategoriesWithTopProducts(4, null, pageNum) // skip analytics
     ]);
 
-    // Define all sections
-    const allSections = [
+    const initialSections = [
       {
         sectionId: 'sponsored',
         title: 'Sponsored Products',
         type: 'sponsored',
         products: sponsoredProducts,
-        showMore: sponsoredProducts.length >= 6,
-      },
-      {
-        sectionId: 'todays_picks',
-        title: "Today's Picks",
-        type: 'curated',
-        products: todaysPicks,
-        showMore: todaysPicks.length >= 5,
+        showMore: sponsoredProducts.length >= 3,
       },
       {
         sectionId: 'recently_added',
@@ -88,33 +76,18 @@ router.get('/complete', asyncHandler(async (req, res) => {
         type: 'recent',
         products: recentlyAdded,
         showMore: recentlyAdded.length >= 6,
-      },
-      {
-        sectionId: 'recommended',
-        title: 'Just For You',
-        type: 'personalized',
-        products: recommended,
-        showMore: recommended.length >= 5,
-      },
-      {
-        sectionId: 'trending',
-        title: 'Trending Now',
-        type: 'trending',
-        products: trending,
-        showMore: trending.length >= 5,
-      },
+      }
     ];
 
-    // Add category sections
     if (categoriesWithProducts.categories) {
       categoriesWithProducts.categories.forEach((catData) => {
-        allSections.push({
+        initialSections.push({
           sectionId: `category_${catData.category._id}`,
           title: catData.category.name,
           type: 'category',
           categoryId: catData.category._id,
           products: catData.products.map((product) => {
-            delete product.address; // Remove address field if present
+            delete product.address;
             return product;
           }),
           showMore: catData.products.length >= 4,
@@ -122,54 +95,117 @@ router.get('/complete', asyncHandler(async (req, res) => {
       });
     }
 
-    // Randomly shuffle sections for dynamic ordering
-    const shuffledSections = shuffleArray([...allSections]);
-
-    // Mix sponsored products into other sections if requested
-    if (includeMixedSponsored && sponsoredProducts.length > 0) {
-      shuffledSections.forEach((section) => {
-        if (section.type !== 'sponsored' && section.products.length > 0) {
-          const sponsoredToMix = sponsoredProducts
-            .sort(() => 0.5 - Math.random())
-            .slice(0, Math.random() > 0.5 ? 2 : 1);
-
-          sponsoredToMix.forEach((sponsoredProduct) => {
-            const randomIndex = Math.floor(Math.random() * (section.products.length + 1));
-            section.products.splice(randomIndex, 0, {
-              ...sponsoredProduct,
-              isSponsored: true,
-              originalSection: section.sectionId,
-            });
-          });
-        }
-      });
-    }
-
-    const feedData = {
-      sections: shuffledSections,
-      metadata: {
-        totalSections: shuffledSections.length,
-        hasMixedSponsored: includeMixedSponsored,
-        generatedAt: new Date(),
-        userId: userId || 'guest',
-        page: pageNum,
-      },
-    };
-
-    // Cache the result safely
-    cache.set(cacheKey, safeSerialize(feedData));
-
+    // 3️⃣ Send initial response immediately (fast!)
     res.json({
       success: true,
-      message: 'Complete feed retrieved successfully',
-      data: feedData,
+      message: 'Feed retrieved quickly. Analytics loading in background...',
+      data: {
+        sections: initialSections,
+        metadata: {
+          totalSections: initialSections.length,
+          hasMixedSponsored: includeMixedSponsored,
+          generatedAt: new Date(),
+          userId: userId || 'guest',
+          page: pageNum,
+        },
+      }
     });
+
+    // 4️⃣ Enrich remaining sections with analytics in the background
+    if (useAnalytics) {
+      (async () => {
+        try {
+          const [
+            todaysPicks,
+            recommended,
+            trending
+          ] = await Promise.all([
+            getTodaysPicksSection(5, true),
+            userId ? getRecommendedProducts(userId, 5, true) : getRandomProducts(5),
+            getTrendingProducts(5, true)
+          ]);
+
+          // Combine all sections
+          const allSections = [
+            ...initialSections,
+            {
+              sectionId: 'todays_picks',
+              title: "Today's Picks",
+              type: 'curated',
+              products: todaysPicks,
+              showMore: todaysPicks.length >= 5,
+            },
+            {
+              sectionId: 'recommended',
+              title: 'Just For You',
+              type: 'personalized',
+              products: recommended,
+              showMore: recommended.length >= 5,
+            },
+            {
+              sectionId: 'trending',
+              title: 'Trending Now',
+              type: 'trending',
+              products: trending,
+              showMore: trending.length >= 5,
+            }
+          ];
+
+          // Shuffle sections for variety
+          const shuffledSections = shuffleArray([...allSections]);
+
+          // Mix sponsored products if requested
+          if (includeMixedSponsored && sponsoredProducts.length > 0) {
+            shuffledSections.forEach((section) => {
+              if (section.type !== 'sponsored' && section.products.length > 0) {
+                const sponsoredToMix = sponsoredProducts
+                  .sort(() => 0.5 - Math.random())
+                  .slice(0, Math.random() > 0.5 ? 2 : 1);
+
+                sponsoredToMix.forEach((sponsoredProduct) => {
+                  const randomIndex = Math.floor(Math.random() * (section.products.length + 1));
+                  section.products.splice(randomIndex, 0, {
+                    ...sponsoredProduct,
+                    isSponsored: true,
+                    originalSection: section.sectionId,
+                  });
+                });
+              }
+            });
+          }
+
+          // Cache the fully enriched feed
+          cache.set(cacheKey, safeSerialize({
+            sections: shuffledSections,
+            metadata: {
+              totalSections: shuffledSections.length,
+              hasMixedSponsored: includeMixedSponsored,
+              generatedAt: new Date(),
+              userId: userId || 'guest',
+              page: pageNum,
+            }
+          }));
+
+        } catch (error) {
+          console.error('Background feed enrichment error:', error);
+        }
+      })();
+    }
+
   } catch (error) {
-    console.error('Error retrieving complete feed:', error);
+    console.error('Error retrieving feed:', error);
     res.json({
-      success: true, // Match client-side expectation
-      message: 'Error retrieving feed, falling back to empty data',
-      data: { sections: [], metadata: { totalSections: 0, hasMixedSponsored: false, userId: userId || 'guest', page: pageNum } },
+      success: true,
+      message: 'Error retrieving feed, showing lightweight data',
+      data: {
+        sections: [],
+        metadata: {
+          totalSections: 0,
+          hasMixedSponsored: false,
+          userId: userId || 'guest',
+          page: pageNum
+        }
+      }
     });
   }
 }));
