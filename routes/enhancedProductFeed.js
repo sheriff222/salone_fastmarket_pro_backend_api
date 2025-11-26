@@ -14,6 +14,9 @@ const cache = new NodeCache({ stdTTL: 120 }); // 5-minute cache
 const feedCache = new NodeCache({ stdTTL: 60 });
 const categoryCache = new NodeCache({ stdTTL: 120 });
 
+feedCache.on('expired', (key, value) => {
+  console.log(`🧹 Expired cache key: ${key}`);
+});
 
 
 const { analyticsLimiter } = require('../middleware/rateLimmiter');
@@ -24,6 +27,9 @@ const {
     formatErrorResponse,
     formatSuccessResponse
 } = require('../utils/analyticsHelper');
+
+
+const safeSerialize = (data) => JSON.parse(JSON.stringify(data));
 
 /**
  * @route   GET /api/feed/complete
@@ -44,8 +50,13 @@ router.get('/complete', asyncHandler(async (req, res) => {
   const pageNum = parseInt(page);
   const cacheKey = `complete_feed_${userId || 'guest'}_${pageNum}`;
 
+  // ✅ ADD CACHE VARIANCE - Different random seed every 30 seconds
+  // This ensures feed refreshes with new randomization every 30s
+  const timeSlot = Math.floor(Date.now() / 30000); // Changes every 30 seconds
+  const cacheKeyWithVariance = `${cacheKey}_${timeSlot}`;
+
   // ✅ CHECK CACHE FIRST (instant if cached)
-  const cachedData = feedCache.get(cacheKey);
+  const cachedData = feedCache.get(cacheKeyWithVariance);
   if (cachedData) {
     console.log(`⚡ Cache hit! Served in ${Date.now() - startTime}ms`);
     return res.json({
@@ -88,8 +99,12 @@ router.get('/complete', asyncHandler(async (req, res) => {
         .populate('proCategoryId', 'name')
         .populate('sellerId', 'fullName')
         .sort({ createdAt: -1 })
-        .limit(8)
-        .lean(),
+        .limit(16) // ✅ Fetch 2x for randomization
+        .lean()
+        .then(products => {
+          // ✅ SHUFFLE and take only 8
+          return products.sort(() => Math.random() - 0.5).slice(0, 8);
+        }),
 
       // Get 3 categories with 6 products each (light query)
       getCategoriesWithProductsFast(6, 3)
@@ -136,10 +151,22 @@ router.get('/complete', asyncHandler(async (req, res) => {
       });
     });
 
+    // ✅ RANDOMIZE SECTION ORDER (except keep Sponsored first if exists)
+    const sponsoredSection = sections.find(s => s.type === 'sponsored');
+    const otherSections = sections.filter(s => s.type !== 'sponsored');
+    
+    // Shuffle other sections
+    const shuffledSections = otherSections.sort(() => Math.random() - 0.5);
+    
+    // Rebuild: Sponsored first, then randomized sections
+    const finalSections = sponsoredSection 
+      ? [sponsoredSection, ...shuffledSections]
+      : shuffledSections;
+
     const responseData = {
-      sections,
+      sections: finalSections, // ✅ Use randomized sections
       metadata: {
-        totalSections: sections.length,
+        totalSections: finalSections.length,
         generatedAt: new Date(),
         userId: userId || 'guest',
         page: pageNum,
@@ -147,8 +174,8 @@ router.get('/complete', asyncHandler(async (req, res) => {
       }
     };
 
-    // ✅ CACHE FOR 60 SECONDS
-    feedCache.set(cacheKey, safeSerialize(responseData));
+    // ✅ CACHE FOR 60 SECONDS (with variance key for randomization)
+    feedCache.set(cacheKeyWithVariance, safeSerialize(responseData));
 
     console.log(`✅ Feed loaded in ${Date.now() - startTime}ms`);
 
@@ -314,8 +341,6 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
     });
   }
 }));
-
-
 
 
 /**
@@ -1041,14 +1066,19 @@ async function getCategoriesWithProductsFast(productsPerCategory, maxCategories)
   if (cached) return cached;
 
   try {
-    // Get top categories
-    const categories = await Category.find()
-      .limit(maxCategories)
-      .lean();
+    // Get top categories - RANDOMIZED
+    const allCategories = await Category.find().lean();
+    
+    // ✅ SHUFFLE CATEGORIES for variety
+    const shuffledCategories = allCategories.sort(() => Math.random() - 0.5);
+    const categories = shuffledCategories.slice(0, maxCategories);
 
     // Parallel fetch products for each category
     const categoryPromises = categories.map(async (category) => {
-      const [products, totalCount] = await Promise.all([
+      // ✅ GET MORE PRODUCTS THAN NEEDED (for randomization)
+      const fetchLimit = productsPerCategory * 2;
+      
+      const [allProducts, totalCount] = await Promise.all([
         Product.find({ 
           proCategoryId: category._id,
           quantity: { $gt: 0 }
@@ -1056,8 +1086,7 @@ async function getCategoriesWithProductsFast(productsPerCategory, maxCategories)
           .select('name price offerPrice images quantity proCategoryId sellerId')
           .populate('proCategoryId', 'name')
           .populate('sellerId', 'fullName')
-          .sort({ createdAt: -1 })
-          .limit(productsPerCategory)
+          .limit(fetchLimit) // Get more for randomization
           .lean(),
         
         Product.countDocuments({ 
@@ -1065,6 +1094,10 @@ async function getCategoriesWithProductsFast(productsPerCategory, maxCategories)
           quantity: { $gt: 0 }
         })
       ]);
+
+      // ✅ SHUFFLE PRODUCTS and take only what we need
+      const shuffledProducts = allProducts.sort(() => Math.random() - 0.5);
+      const products = shuffledProducts.slice(0, productsPerCategory);
 
       return {
         category,
