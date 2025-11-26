@@ -26,83 +26,160 @@ const io = socketIO(server, {
   },
 });
 
-// Consolidated Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
 
-  socket.on('delete_conversation', async (data) => {
-    try {
-        const { conversationId, userId } = data;
 
-        console.log(`🗑️ Socket: User ${userId} deleting conversation ${conversationId}`);
 
-        // Broadcast to other participants
-        const conversation = await Conversation.findById(conversationId);
-        if (conversation) {
-            conversation.participants.forEach((participantId) => {
-                if (participantId.toString() !== userId) {
-                    io.to(participantId.toString()).emit('conversation_deleted', {
-                        conversationId,
-                        userId,
-                        timestamp: new Date().toISOString(),
-                    });
-                }
-            });
+
+
+
+/**
+ * Broadcast user status to all relevant users
+ */
+async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
+  try {
+    // Find all conversations this user is part of
+    const conversations = await Conversation.find({
+      participants: userId
+    }).populate('participants', '_id');
+
+    // Get unique participant IDs (excluding the user themselves)
+    const participantIds = new Set();
+    conversations.forEach(conv => {
+      conv.participants.forEach(participant => {
+        const participantId = participant._id.toString();
+        if (participantId !== userId) {
+          participantIds.add(participantId);
         }
-    } catch (error) {
-        console.error('Delete conversation socket error:', error);
-        socket.emit('error', { 
-            action: 'delete_conversation',
-            error: error.message 
-        });
-    }
-});
+      });
+    });
 
-  // Store user ID from handshake
+    // Broadcast to all participants
+    const statusPayload = {
+      userId,
+      isOnline,
+      lastSeen: lastSeen.toISOString(),
+      timestamp: new Date().toISOString(),
+    };
+
+    participantIds.forEach(participantId => {
+      io.to(participantId).emit('user_status', statusPayload);
+    });
+
+    console.log(`📡 Broadcasted status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'} to ${participantIds.size} users`);
+  } catch (error) {
+    console.error('❌ Error broadcasting user status:', error);
+  }
+}
+
+/**
+ * Update user status in database
+ */
+async function updateUserStatus(userId, isOnline, socketId = null) {
+  try {
+    const updateData = {
+      userId,
+      isOnline,
+      lastSeen: new Date(),
+    };
+
+    if (socketId) {
+      updateData.socketId = socketId;
+    }
+
+    await UserStatus.findOneAndUpdate(
+      { userId },
+      updateData,
+      { upsert: true, new: true }
+    );
+
+    console.log(`✅ Updated DB status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+  } catch (error) {
+    console.error('❌ Error updating user status:', error);
+  }
+}
+
+/**
+ * Handle user going online
+ */
+async function handleUserOnline(userId, socketId) {
+  await updateUserStatus(userId, true, socketId);
+  await broadcastUserStatus(userId, true);
+}
+
+/**
+ * Handle user going offline
+ */
+async function handleUserOffline(userId) {
+  const lastSeen = new Date();
+  await updateUserStatus(userId, false, null);
+  await broadcastUserStatus(userId, false, lastSeen);
+}
+
+
+// Consolidated Socket.IO connection handling
+
+io.on('connection', (socket) => {
+  console.log('🔌 User connected:', socket.id);
+
+  // Store userId from handshake
   const userId = socket.handshake.headers.userid || socket.handshake.query.userId;
+  
+  if (!userId) {
+    console.error('❌ No userId provided in connection');
+    socket.disconnect();
+    return;
+  }
+
   socket.userId = userId;
 
-  // Join user to their personal room
-  socket.join(userId);
-  console.log(`User ${userId} joined room`);
-
-  // Broadcast user online status
-  socket.broadcast.emit('user_online', {
-    userId: userId,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Handle join event
-  socket.on('join', async (userId) => {
-    socket.join(userId);
-    console.log(`User ${userId} joined room`);
-
-    // Update user status to online
+  // ============================================================================
+  // JOIN EVENT - User becomes online
+  // ============================================================================
+  socket.on('join', async (incomingUserId) => {
     try {
-      await UserStatus.findOneAndUpdate(
-        { userId },
-        { 
-          userId, 
-          isOnline: true, 
-          lastSeen: new Date(),
-          socketId: socket.id 
-        },
-        { upsert: true, new: true }
-      );
+      const userIdToUse = incomingUserId || userId;
+      
+      // Join user's personal room
+      socket.join(userIdToUse);
+      console.log(`✅ User ${userIdToUse} joined room`);
 
-      // Broadcast status to relevant users
-      socket.broadcast.emit('user_status', {
-        userId,
-        isOnline: true,
-        lastSeen: new Date().toISOString(),
-      });
+      // Set user as online
+      await handleUserOnline(userIdToUse, socket.id);
+
     } catch (error) {
-      console.error('User join error:', error);
-      socket.emit('error', { error: error.message });
+      console.error('❌ Join error:', error);
+      socket.emit('error', { 
+        action: 'join',
+        error: error.message 
+      });
     }
   });
 
-  // Handle message metadata routing (no message creation)
+  // ============================================================================
+  // HEARTBEAT - Keep connection alive and update lastSeen
+  // ============================================================================
+  socket.on('heartbeat', async (data) => {
+    try {
+      const { userId: heartbeatUserId } = data;
+      const userIdToUse = heartbeatUserId || userId;
+
+      await UserStatus.findOneAndUpdate(
+        { userId: userIdToUse },
+        { 
+          lastSeen: new Date(),
+          socketId: socket.id 
+        }
+      );
+
+      console.log(`💓 Heartbeat from ${userIdToUse}`);
+    } catch (error) {
+      console.error('❌ Heartbeat error:', error);
+    }
+  });
+
+  // ============================================================================
+  // MESSAGE ROUTING
+  // ============================================================================
   socket.on('send_message', async (data) => {
     try {
       const { 
@@ -114,11 +191,10 @@ io.on('connection', (socket) => {
         timestamp 
       } = data;
 
-      console.log('📡 Socket metadata received:', { messageId, conversationId, messageType });
+      console.log('📡 Message metadata received:', { messageId, conversationId });
 
       // Validate required fields
       if (!messageId || !conversationId || !senderId || !messageType || !content) {
-        console.error('❌ Invalid socket metadata:', data);
         socket.emit('message_error', { 
           error: 'Invalid message metadata',
           messageId 
@@ -126,10 +202,11 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Verify conversation exists and sender is participant
-      const conversation = await Conversation.findById(conversationId).populate('participants');
+      // Verify conversation and participants
+      const conversation = await Conversation.findById(conversationId)
+        .populate('participants');
+        
       if (!conversation) {
-        console.error('❌ Conversation not found:', conversationId);
         socket.emit('message_error', { 
           error: 'Conversation not found',
           messageId 
@@ -138,7 +215,6 @@ io.on('connection', (socket) => {
       }
 
       if (!conversation.participants.some(p => p._id.toString() === senderId)) {
-        console.error('❌ Sender not in conversation:', { senderId, conversationId });
         socket.emit('message_error', { 
           error: 'Unauthorized sender',
           messageId 
@@ -146,22 +222,19 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Route metadata to all participants (including sender for ACK)
-      let deliveredCount = 0;
+      // Send ACK to sender
+      socket.emit('message_sent', {
+        messageId,
+        conversationId,
+        status: 'sent',
+        timestamp: new Date().toISOString(),
+      });
+
+      // Route to other participants
       conversation.participants.forEach((participant) => {
         const participantId = participant._id.toString();
         
-        if (participantId === senderId) {
-          // Send ACK to sender
-          socket.emit('message_sent', {
-            messageId,
-            conversationId,
-            status: 'sent',
-            timestamp: new Date().toISOString(),
-          });
-          console.log(`✅ ACK sent to sender: ${senderId}`);
-        } else {
-          // Send metadata to other participants
+        if (participantId !== senderId) {
           io.to(participantId).emit('new_message', {
             messageId,
             conversationId,
@@ -171,15 +244,13 @@ io.on('connection', (socket) => {
             timestamp: timestamp || new Date().toISOString(),
             status: 'delivered',
           });
-          deliveredCount++;
-          console.log(`📤 Metadata sent to participant: ${participantId}`);
         }
       });
 
-      console.log(`✅ Message metadata routed to ${deliveredCount} recipients`);
+      console.log(`✅ Message routed to ${conversation.participants.length - 1} recipients`);
       
     } catch (error) {
-      console.error('❌ Socket metadata routing error:', error);
+      console.error('❌ Message routing error:', error);
       socket.emit('message_error', { 
         error: error.message,
         messageId: data.messageId 
@@ -187,86 +258,99 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle typing indicators
+  // ============================================================================
+  // TYPING INDICATOR
+  // ============================================================================
   socket.on('typing', async (data) => {
     try {
-      const { conversationId, userId, isTyping } = data;
+      const { conversationId, userId: typingUserId, isTyping } = data;
       
-      console.log(`👤 ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`);
-      
-      // Get conversation to find other participants
-      const conversation = await Conversation.findById(conversationId).populate('participants');
+      const conversation = await Conversation.findById(conversationId)
+        .populate('participants');
+        
       if (conversation) {
         conversation.participants.forEach((participant) => {
-          if (participant._id.toString() !== userId) {
+          if (participant._id.toString() !== typingUserId) {
             io.to(participant._id.toString()).emit('user_typing', {
               conversationId,
-              userId,
+              userId: typingUserId,
               isTyping,
             });
           }
         });
       }
     } catch (error) {
-      console.error('Typing indicator error:', error);
-      socket.emit('error', { error: error.message });
+      console.error('❌ Typing indicator error:', error);
     }
   });
 
-  // Handle recording indicator
-  socket.on('recording_indicator', (data) => {
-    const { conversationId, isRecording } = data;
-    
-    // Broadcast to conversation participants
-    socket.to(conversationId).emit('recording_indicator', {
-      userId: socket.userId,
-      conversationId,
-      isRecording,
-      timestamp: new Date().toISOString(),
-    });
-    console.log(`🎤 ${socket.userId} ${isRecording ? 'started' : 'stopped'} recording in ${conversationId}`);
+  // ============================================================================
+  // RECORDING INDICATOR
+  // ============================================================================
+  socket.on('recording_indicator', async (data) => {
+    try {
+      const { conversationId, isRecording } = data;
+      
+      const conversation = await Conversation.findById(conversationId)
+        .populate('participants');
+        
+      if (conversation) {
+        conversation.participants.forEach((participant) => {
+          if (participant._id.toString() !== userId) {
+            io.to(participant._id.toString()).emit('recording_indicator', {
+              userId,
+              conversationId,
+              isRecording,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error('❌ Recording indicator error:', error);
+    }
   });
 
-  // Handle mark messages as read
+  // ============================================================================
+  // MARK MESSAGES AS READ
+  // ============================================================================
   socket.on('mark_read', async (data) => {
     try {
-      const { conversationId, userId } = data;
+      const { conversationId, userId: readUserId } = data;
 
-      console.log(`👀 User ${userId} marking messages as read in ${conversationId}`);
-
-      // Update message statuses in database
+      // Update message statuses
       await Message.updateMany(
         {
           conversationId,
-          sender: { $ne: userId },
+          sender: { $ne: readUserId },
           status: { $ne: 'read' },
         },
         { status: 'read' }
       );
 
       // Update conversation unread count
-      const conversation = await Conversation.findById(conversationId);
+      const conversation = await Conversation.findById(conversationId)
+        .populate('participants');
+        
       if (conversation) {
-        conversation.unreadCounts.set(userId, 0);
+        conversation.unreadCounts.set(readUserId, 0);
         await conversation.save();
+
+        // Notify other participants
+        conversation.participants.forEach((participant) => {
+          if (participant._id.toString() !== readUserId) {
+            io.to(participant._id.toString()).emit('messages_read', { 
+              conversationId,
+              userId: readUserId,
+            });
+          }
+        });
       }
 
-      // Notify other participants
-      const conv = await Conversation.findById(conversationId).populate('participants');
-      conv.participants.forEach((participant) => {
-        if (participant._id.toString() !== userId) {
-          io.to(participant._id.toString()).emit('messages_read', { 
-            conversationId,
-            userId,
-          });
-        }
-      });
-
-      // Send success confirmation to the user
       socket.emit('mark_read_success', { conversationId });
       
     } catch (error) {
-      console.error('Mark read error:', error);
+      console.error('❌ Mark read error:', error);
       socket.emit('error', { 
         action: 'mark_read', 
         error: error.message 
@@ -274,99 +358,51 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle user online status
-  socket.on('user_online', async (data) => {
+  // ============================================================================
+  // DELETE CONVERSATION
+  // ============================================================================
+  socket.on('delete_conversation', async (data) => {
     try {
-      const { userId } = data;
-      await UserStatus.findOneAndUpdate(
-        { userId },
-        { 
-          userId,
-          isOnline: true, 
-          lastSeen: new Date(),
-          socketId: socket.id 
-        },
-        { upsert: true, new: true }
-      );
-      
-      // Broadcast status to relevant users
-      socket.broadcast.emit('user_status', {
-        userId,
-        isOnline: true,
-        lastSeen: new Date().toISOString(),
+      const { conversationId, userId: deletingUserId } = data;
+
+      const conversation = await Conversation.findById(conversationId);
+      if (conversation) {
+        conversation.participants.forEach((participantId) => {
+          if (participantId.toString() !== deletingUserId) {
+            io.to(participantId.toString()).emit('conversation_deleted', {
+              conversationId,
+              userId: deletingUserId,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error('❌ Delete conversation error:', error);
+      socket.emit('error', { 
+        action: 'delete_conversation',
+        error: error.message 
       });
-    } catch (error) {
-      console.error('User online error:', error);
-      socket.emit('error', { error: error.message });
     }
   });
 
-  // Handle user offline status
-  socket.on('user_offline', async (data) => {
-    try {
-      const { userId } = data;
-      await UserStatus.findOneAndUpdate(
-        { userId },
-        { 
-          isOnline: false, 
-          lastSeen: new Date() 
-        }
-      );
-      
-      // Broadcast status to relevant users
-      socket.broadcast.emit('user_status', {
-        userId,
-        isOnline: false,
-        lastSeen: new Date().toISOString(),
-      });
-    } catch (error) {
-      console.error('User offline error:', error);
-      socket.emit('error', { error: error.message });
-    }
-  });
-
-  // Handle heartbeat
-  socket.on('heartbeat', async (data) => {
-    try {
-      const { userId } = data;
-      await UserStatus.findOneAndUpdate(
-        { userId },
-        { 
-          lastSeen: new Date(),
-          socketId: socket.id 
-        }
-      );
-      console.log(`💓 Heartbeat received from user: ${userId}`);
-    } catch (error) {
-      console.error('Heartbeat error:', error);
-    }
-  });
-
-  // Handle user disconnect
+  // ============================================================================
+  // DISCONNECT - User goes offline
+  // ============================================================================
   socket.on('disconnect', async () => {
-    console.log('User disconnected:', socket.id);
+    console.log('🔌 User disconnected:', socket.id);
     
-    // Update user status to offline
     try {
-      await UserStatus.findOneAndUpdate(
-        { socketId: socket.id },
-        { 
-          isOnline: false, 
-          lastSeen: new Date() 
-        }
-      );
-
-      // Broadcast user offline status with last seen
-      socket.broadcast.emit('user_offline', {
-        userId: socket.userId,
-        lastSeen: new Date().toISOString(),
-        timestamp: new Date().toISOString(),
-      });
+      if (userId) {
+        // Set user as offline
+        await handleUserOffline(userId);
+      }
     } catch (error) {
-      console.error('Disconnect error:', error);
+      console.error('❌ Disconnect error:', error);
     }
   });
 });
+
 
 // Helper function to get message preview text
 function getMessagePreview(messageType) {
