@@ -6,7 +6,6 @@ const Category = require('../model/category');
 const AnalyticsEvent = require('../model/analytics');
 const SponsoredProduct = require('../model/sponsoredProduct');
 const asyncHandler = require('express-async-handler');
-const safeSerialize = (data) => JSON.parse(JSON.stringify(data));
 // Cache for frequently accessed data
 const NodeCache = require('node-cache');
 const cache = new NodeCache({ stdTTL: 120 }); // 5-minute cache
