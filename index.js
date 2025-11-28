@@ -37,23 +37,34 @@ const io = socketIO(server, {
  */
 async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
   try {
-    // Find all conversations this user is part of
+    // FIX: Query both old and new schema formats
     const conversations = await Conversation.find({
-      participants: userId
-    }).populate('participants', '_id');
+      $or: [
+        { participants: userId },
+        { buyerId: userId },
+        { sellerId: userId }
+      ]
+    }).populate('participants buyerId sellerId', '_id');
 
-    // Get unique participant IDs (excluding the user themselves)
     const participantIds = new Set();
     conversations.forEach(conv => {
-      conv.participants.forEach(participant => {
+      // Add from participants array
+      conv.participants?.forEach(participant => {
         const participantId = participant._id.toString();
         if (participantId !== userId) {
           participantIds.add(participantId);
         }
       });
+      
+      // Add from buyerId/sellerId
+      if (conv.buyerId && conv.buyerId._id.toString() !== userId) {
+        participantIds.add(conv.buyerId._id.toString());
+      }
+      if (conv.sellerId && conv.sellerId._id.toString() !== userId) {
+        participantIds.add(conv.sellerId._id.toString());
+      }
     });
 
-    // Broadcast to all participants
     const statusPayload = {
       userId,
       isOnline,
