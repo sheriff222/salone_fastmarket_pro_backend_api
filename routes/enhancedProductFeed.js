@@ -9,7 +9,8 @@ const asyncHandler = require('express-async-handler');
 // Cache for frequently accessed data
 const NodeCache = require('node-cache');
 const cache = new NodeCache({ stdTTL: 120 }); // 5-minute cache
-
+const compression = require('compression');
+const instantCache = new NodeCache({ stdTTL: 300 });
 const feedCache = new NodeCache({ stdTTL: 60 });
 const categoryCache = new NodeCache({ stdTTL: 120 });
 
@@ -36,43 +37,102 @@ const safeSerialize = (data) => JSON.parse(JSON.stringify(data));
  * @access  Public
  */
 
+router.use(compression({
+  level: 6, // Good balance of speed vs compression
+  threshold: 1024, // Only compress responses > 1KB
+}));
 
-
-router.get('/complete', asyncHandler(async (req, res) => {
+/**
+ * @route   GET /api/feed/instant
+ * @desc    Ultra-fast initial feed - returns ONLY 6 products
+ * @access  Public
+ */
+router.get('/instant', asyncHandler(async (req, res) => {
   const startTime = Date.now();
-  const {
-    userId = null,
-    analytics = 'false', // ✅ CHANGED: Default to false for speed
-    page = 1,
-  } = req.query;
+  
+  // CACHE KEY - rotates every 5 minutes for "freshness" feel
+  const cacheSlot = Math.floor(Date.now() / 300000); // 5-min slots
+  const cacheKey = `instant_feed_${cacheSlot}`;
 
-  const pageNum = parseInt(page);
-  const cacheKey = `complete_feed_${userId || 'guest'}_${pageNum}`;
-
-  // ✅ ADD CACHE VARIANCE - Different random seed every 30 seconds
-  // This ensures feed refreshes with new randomization every 30s
-  const timeSlot = Math.floor(Date.now() / 30000); // Changes every 30 seconds
-  const cacheKeyWithVariance = `${cacheKey}_${timeSlot}`;
-
-  // ✅ CHECK CACHE FIRST (instant if cached)
-  const cachedData = feedCache.get(cacheKeyWithVariance);
-  if (cachedData) {
-    console.log(`⚡ Cache hit! Served in ${Date.now() - startTime}ms`);
-    return res.json({
-      success: true,
-      message: 'Feed retrieved from cache',
-      data: cachedData,
-    });
+  // CHECK CACHE FIRST
+  const cached = instantCache.get(cacheKey);
+  if (cached) {
+    console.log(`⚡ INSTANT CACHE HIT - ${Date.now() - startTime}ms`);
+    return res.json(cached);
   }
 
   try {
-    // ✅ PARALLEL QUERIES - All run at once (not sequential!)
-    const [
-      sponsoredProducts,
-      recentProducts,
-      categoriesWithProducts
-    ] = await Promise.all([
-      // Get 6 sponsored products (light query, no analytics)
+    // FETCH ONLY 6 PRODUCTS - Absolute minimum fields
+    const products = await Product.find({ quantity: { $gt: 0 } })
+      .select('name price offerPrice images.url') // ONLY essential fields
+      .sort({ createdAt: -1 }) // Recent first
+      .limit(6)
+      .lean();
+
+    // MINIMAL RESPONSE
+    const response = {
+      success: true,
+      data: {
+        products: products.map(p => ({
+          _id: p._id,
+          sId: p._id, // Compatibility
+          name: p.name,
+          price: p.price,
+          offerPrice: p.offerPrice,
+          images: p.images?.slice(0, 1) || [], // ONLY first image
+        })),
+        loadTimeMs: Date.now() - startTime
+      }
+    };
+
+    // CACHE FOR 5 MINUTES
+    instantCache.set(cacheKey, response);
+
+    console.log(`✅ INSTANT FEED SERVED - ${Date.now() - startTime}ms`);
+    res.json(response);
+
+  } catch (error) {
+    console.error('❌ Instant feed error:', error);
+    // FALLBACK - Return empty but fast
+    res.json({
+      success: true,
+      data: { products: [], loadTimeMs: Date.now() - startTime }
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/feed/complete
+ * @desc    Full feed with smart caching and analytics-based randomization
+ * @access  Public
+ */
+/**
+ * @route   GET /api/feed/complete
+ * @desc    Full feed with smart caching and analytics-based randomization
+ * @access  Public
+ */
+router.get('/complete', asyncHandler(async (req, res) => {
+  const startTime = Date.now();
+  const { userId = null, page = 1, categoriesLimit = 5 } = req.query;
+  const pageNum = parseInt(page);
+  const categoryLimit = parseInt(categoriesLimit);
+
+  // SMART CACHE KEY - Different for logged-in users
+  const cacheSlot = Math.floor(Date.now() / 300000); // 5-min rotation
+  const userSegment = userId ? 'logged_in' : 'guest';
+  const cacheKey = `feed_${userSegment}_${pageNum}_${categoryLimit}_${cacheSlot}`;
+
+  // CHECK CACHE
+  const cached = instantCache.get(cacheKey);
+  if (cached) {
+    console.log(`⚡ COMPLETE FEED CACHE HIT - ${Date.now() - startTime}ms`);
+    return res.json(cached);
+  }
+
+  try {
+    // PARALLEL FETCH - All sections at once
+    const [sponsoredProducts, recentProducts, allCategories] = await Promise.all([
+      // 1. SPONSORED (if any)
       SponsoredProduct.find({
         isActive: true,
         status: 'active',
@@ -83,109 +143,126 @@ router.get('/complete', asyncHandler(async (req, res) => {
           path: 'productId',
           select: 'name price offerPrice images quantity proCategoryId sellerId',
           match: { quantity: { $gt: 0 } },
-          populate: [
-            { path: 'proCategoryId', select: 'name' },
-            { path: 'sellerId', select: 'fullName' }
-          ]
         })
         .sort({ priority: -1 })
         .limit(6)
         .lean(),
 
-      // Get 8 recent products (light query)
+      // 2. RECENT PRODUCTS - Get 30 to randomize from
       Product.find({ quantity: { $gt: 0 } })
         .select('name price offerPrice images quantity proCategoryId sellerId createdAt')
-        .populate('proCategoryId', 'name')
-        .populate('sellerId', 'fullName')
         .sort({ createdAt: -1 })
-        .limit(16) // ✅ Fetch 2x for randomization
-        .lean()
-        .then(products => {
-          // ✅ SHUFFLE and take only 8
-          return products.sort(() => Math.random() - 0.5).slice(0, 8);
-        }),
+        .limit(30)
+        .lean(),
 
-      // Get 3 categories with 6 products each (light query)
-      getCategoriesWithProductsFast(6, 3)
+      // 3. ALL CATEGORIES (not just 3!)
+      Category.find().lean()
     ]);
 
-    // ✅ BUILD SECTIONS (minimal processing)
+    // BUILD SECTIONS
     const sections = [];
 
-    // Sponsored Section
+    // SECTION 1: Sponsored (if exists)
     const validSponsored = sponsoredProducts
       .filter(s => s.productId)
-      .map(s => ({ ...s.productId, isSponsored: true }));
+      .map(s => s.productId);
 
     if (validSponsored.length > 0) {
       sections.push({
         sectionId: 'sponsored',
         title: 'Sponsored Products',
         type: 'sponsored',
-        products: validSponsored,
-        showMore: false, // No "see more" for sponsored
+        products: validSponsored.slice(0, 6),
+        showMore: false,
       });
     }
 
-    // Recent Section
-    if (recentProducts.length > 0) {
-      sections.push({
-        sectionId: 'recently_added',
-        title: 'Recently Added',
-        type: 'recent',
-        products: recentProducts,
-        showMore: true, // ✅ Enable "See More"
-      });
-    }
-
-    // Category Sections
-    categoriesWithProducts.forEach(catData => {
-      sections.push({
-        sectionId: `category_${catData.category._id}`,
-        title: catData.category.name,
-        type: 'category',
-        categoryId: catData.category._id.toString(),
-        products: catData.products,
-        showMore: catData.hasMore, // ✅ TRUE if more products exist
-      });
+    // SECTION 2: Recently Added (randomized from pool)
+    const shuffledRecent = shuffleArray(recentProducts).slice(0, 10);
+    sections.push({
+      sectionId: 'recently_added',
+      title: 'Recently Added',
+      type: 'recent',
+      products: shuffledRecent,
+      showMore: true,
     });
 
-    // ✅ RANDOMIZE SECTION ORDER (except keep Sponsored first if exists)
-    const sponsoredSection = sections.find(s => s.type === 'sponsored');
-    const otherSections = sections.filter(s => s.type !== 'sponsored');
-    
-    // Shuffle other sections
-    const shuffledSections = otherSections.sort(() => Math.random() - 0.5);
-    
-    // Rebuild: Sponsored first, then randomized sections
-    const finalSections = sponsoredSection 
-      ? [sponsoredSection, ...shuffledSections]
-      : shuffledSections;
+    // SECTION 3-N: Category sections (parallel fetch)
+    // Shuffle categories for variety on each cache refresh
+    const shuffledCategories = shuffleArray(allCategories);
+    const topCategories = shuffledCategories.slice(0, categoryLimit);
 
-    const responseData = {
-      sections: finalSections, // ✅ Use randomized sections
-      metadata: {
-        totalSections: finalSections.length,
-        generatedAt: new Date(),
-        userId: userId || 'guest',
-        page: pageNum,
-        loadTimeMs: Date.now() - startTime
+    const categoryPromises = topCategories.map(async (category) => {
+      try {
+        // Fetch products for this category
+        const products = await Product.find({
+          proCategoryId: category._id,
+          quantity: { $gt: 0 }
+        })
+          .select('name price offerPrice images quantity proCategoryId sellerId')
+          .populate('proCategoryId', 'name')
+          .populate('sellerId', 'fullName')
+          .limit(12) // Get 12 to randomize
+          .lean();
+
+        if (products.length === 0) {
+          console.log(`⚠️ No products found for category: ${category.name}`);
+          return null;
+        }
+
+        // Count total for "showMore"
+        const totalCount = await Product.countDocuments({
+          proCategoryId: category._id,
+          quantity: { $gt: 0 }
+        });
+
+        console.log(`✅ Category "${category.name}": ${products.length} products (${totalCount} total)`);
+
+        return {
+          sectionId: `category_${category._id}`,
+          title: category.name,
+          type: 'category',
+          categoryId: category._id.toString(),
+          products: shuffleArray(products).slice(0, 6),
+          showMore: totalCount > 6,
+          totalProducts: totalCount
+        };
+      } catch (error) {
+        console.error(`❌ Error fetching category ${category.name}:`, error);
+        return null;
+      }
+    });
+
+    const categorySections = (await Promise.all(categoryPromises)).filter(Boolean);
+    sections.push(...categorySections);
+
+    console.log(`📦 Total sections created: ${sections.length} (${categorySections.length} categories)`);
+
+    // RESPONSE
+    const response = {
+      success: true,
+      message: 'Complete feed retrieved',
+      data: {
+        sections,
+        metadata: {
+          totalSections: sections.length,
+          categorySections: categorySections.length,
+          generatedAt: new Date().toISOString(),
+          userId: userId || 'guest',
+          page: pageNum,
+          loadTimeMs: Date.now() - startTime
+        }
       }
     };
 
-    // ✅ CACHE FOR 60 SECONDS (with variance key for randomization)
-    feedCache.set(cacheKeyWithVariance, safeSerialize(responseData));
+    // CACHE FOR 5 MINUTES
+    instantCache.set(cacheKey, response);
 
-    console.log(`✅ Feed loaded in ${Date.now() - startTime}ms`);
-
-    res.json({
-      success: true,
-      message: 'Feed retrieved successfully',
-      data: responseData
-    });
+    console.log(`✅ COMPLETE FEED - ${Date.now() - startTime}ms - ${sections.length} sections`);
+    res.json(response);
 
   } catch (error) {
-    console.error('❌ Feed error:', error);
+    console.error('❌ Complete feed error:', error);
     res.status(500).json({
       success: false,
       message: 'Error loading feed',
@@ -193,6 +270,103 @@ router.get('/complete', asyncHandler(async (req, res) => {
     });
   }
 }));
+
+/**
+ * @route   GET /api/feed/section/:sectionType/all
+ * @desc    Load more products for a section (pagination)
+ * @access  Public
+ */
+router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
+  const { sectionType } = req.params;
+  const { categoryId = null, page = 1, limit = 10 } = req.query;
+
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const skip = (pageNum - 1) * limitNum;
+
+  try {
+    let query = { quantity: { $gt: 0 } };
+    
+    // Category filter
+    if (sectionType === 'category' && categoryId) {
+      query.proCategoryId = categoryId;
+    }
+
+    // PARALLEL - Fetch products and count
+    const [products, totalCount] = await Promise.all([
+      Product.find(query)
+        .select('name price offerPrice images quantity proCategoryId sellerId')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      
+      Product.countDocuments(query)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limitNum);
+    const hasMore = pageNum < totalPages;
+
+    res.json({
+      success: true,
+      data: products,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalProducts: totalCount,
+        hasMore,
+        limit: limitNum
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Section pagination error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error loading section',
+      error: error.message
+    });
+  }
+}));
+
+/**
+ * @route   POST /api/feed/track
+ * @desc    Track analytics (non-blocking, fire-and-forget)
+ * @access  Public
+ */
+router.post('/track', (req, res) => {
+  // INSTANT RESPONSE - Don't wait for DB write
+  res.status(200).json({ success: true, message: 'Tracked' });
+
+  // SAVE IN BACKGROUND
+  const { productId, action, userId = null, metadata = {} } = req.body;
+  
+  setImmediate(async () => {
+    try {
+      await AnalyticsEvent.create({
+        productId,
+        action,
+        userId,
+        metadata,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date()
+      });
+    } catch (error) {
+      console.error('⚠️ Analytics save failed (non-critical):', error.message);
+    }
+  });
+});
+
+// UTILITY: Fast array shuffle (Fisher-Yates)
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 
 /**
@@ -275,71 +449,6 @@ router.get('/section/:sectionName', asyncHandler(async (req, res) => {
 }));
 
 
-
-/**
- * @route   GET /api/feed/section/:sectionType/all
- * @desc    Get ALL products for a section (for "See More")
- * @access  Public
- */
-router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
-  const { sectionType } = req.params;
-  const { 
-    categoryId = null, 
-    page = 1, 
-    limit = 10 
-  } = req.query;
-
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
-  const skip = (pageNum - 1) * limitNum;
-
-  try {
-    let query = { quantity: { $gt: 0 } };
-    let sortCriteria = { createdAt: -1 };
-
-    // ✅ CATEGORY-SPECIFIC QUERY
-    if (sectionType === 'category' && categoryId) {
-      query.proCategoryId = categoryId;
-    }
-
-    // ✅ FETCH PRODUCTS + TOTAL COUNT (parallel)
-    const [products, totalCount] = await Promise.all([
-      Product.find(query)
-        .select('name price offerPrice images quantity proCategoryId sellerId')
-        .populate('proCategoryId', 'name')
-        .populate('sellerId', 'fullName')
-        .sort(sortCriteria)
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      
-      Product.countDocuments(query)
-    ]);
-
-    const totalPages = Math.ceil(totalCount / limitNum);
-
-    res.json({
-      success: true,
-      message: `${sectionType} products retrieved`,
-      data: products,
-      pagination: {
-        currentPage: pageNum,
-        totalPages,
-        totalProducts: totalCount,
-        hasMore: pageNum < totalPages,
-        limit: limitNum
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Section load error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error loading section products',
-      error: error.message
-    });
-  }
-}));
 
 
 /**
@@ -1121,41 +1230,6 @@ async function getCategoriesWithProductsFast(productsPerCategory, maxCategories)
     return [];
   }
 }
-
-/**
- * @route   POST /api/feed/track
- * @desc    Track analytics events (views, clicks, favorites, etc.)
- * @access  Public (no auth required)
- */
-router.post('/track', asyncHandler(async (req, res) => {
-  // ✅ IMMEDIATE RESPONSE (don't wait for DB)
-  res.status(200).json({
-    success: true,
-    message: 'Event tracked'
-  });
-
-  // ✅ SAVE IN BACKGROUND (async, no await)
-  const { productId, action, userId = null, metadata = {} } = req.body;
-
-  setImmediate(async () => {
-    try {
-      const analyticsEvent = new AnalyticsEvent({
-        productId,
-        action,
-        userId,
-        metadata,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        timestamp: new Date()
-      });
-
-      await analyticsEvent.save();
-      console.log(`📊 Analytics saved: ${action} for ${productId}`);
-    } catch (error) {
-      console.error('❌ Analytics save error (non-critical):', error.message);
-    }
-  });
-}));
 
 /**
  * @route   GET /api/feed/analytics/product/:productId
