@@ -404,10 +404,6 @@ router.post('/:messageId/upload',
 
 // Send text message
 router.post('/text', asyncHandler(async (req, res) => {
-    console.log('📥 Raw body:', req.body);
-   console.log('📥 Body type:', typeof req.body);
-   console.log('📥 Content-Type header:', req.headers['content-type']);
-   console.log('📥 Keys in body:', Object.keys(req.body || {}));
     const { conversationId, senderId, text, replyToMessageId } = req.body;
 
     if (!conversationId || !senderId || !text || text.trim() === '') {
@@ -465,7 +461,12 @@ router.post('/text', asyncHandler(async (req, res) => {
             { path: 'replyTo', select: 'content messageType sender createdAt' }
         ]);
 
-        await updateConversationLastMessage(conversation, message, senderId);
+        // ✅ TRY to update conversation, but don't fail if it errors
+        try {
+            await updateConversationLastMessage(conversation, message, senderId);
+        } catch (convError) {
+            console.error('⚠️ Failed to update conversation, but message was saved:', convError.message);
+        }
 
         const socketPayload = {
             messageId: message._id,
@@ -578,66 +579,173 @@ async function uploadMessageContent(messageType, files, additionalData) {
 }
 
 async function updateConversationLastMessage(conversation, message, senderId) {
-    try {
-        let receiverId;
-        if (conversation.buyerId && conversation.sellerId) {
-            const senderIdStr = senderId.toString();
-            const buyerIdStr = (conversation.buyerId._id || conversation.buyerId).toString();
-            const sellerIdStr = (conversation.sellerId._id || conversation.sellerId).toString();
-            
-            receiverId = senderIdStr === buyerIdStr ? sellerIdStr : buyerIdStr;
-        }
-        
-        if (receiverId) {
-            const currentUnreadCount = conversation.unreadCounts.get(receiverId.toString()) || 0;
-            conversation.unreadCounts.set(receiverId.toString(), currentUnreadCount + 1);
-        }
-        
-        let previewText = '';
-        switch (message.messageType) {
-            case 'text':
-                previewText = message.content.text || 'Message';
-                break;
-            case 'image':
-                previewText = message.content.text ? `📷 ${message.content.text}` : '📷 Photo';
-                break;
-            case 'video':
-                previewText = message.content.text ? `🎥 ${message.content.text}` : '🎥 Video';
-                break;
-            case 'voice':
-                previewText = '🎵 Voice message';
-                break;
-            case 'document':
-                const fileName = message.content.fileName || 'Document';
-                previewText = `📄 ${fileName}`;
-                break;
-            default:
-                previewText = 'Message';
-        }
-
-        let senderObjectId;
-        if (typeof message.sender === 'string') {
-            senderObjectId = message.sender;
-        } else if (message.sender && typeof message.sender === 'object' && message.sender._id) {
-            senderObjectId = message.sender._id.toString();
-        } else {
-            senderObjectId = senderId.toString();
-        }
-
-        conversation.lastMessage = {
-            text: previewText,
-            sender: senderObjectId,
-            timestamp: new Date(),
-            messageType: message.messageType
-        };
-        
-        conversation.updatedAt = new Date();
-        await conversation.save();
-        
-    } catch (error) {
-        console.error('Error updating conversation:', error);
-        throw error;
+  try {
+    // ✅ CRITICAL: Validate inputs first
+    if (!conversation) {
+      console.error('❌ updateConversationLastMessage: conversation is null');
+      return;
     }
+
+    if (!senderId) {
+      console.error('❌ updateConversationLastMessage: senderId is null');
+      return;
+    }
+
+    if (!message) {
+      console.error('❌ updateConversationLastMessage: message is null');
+      return;
+    }
+
+    console.log('📝 Updating conversation:', {
+      conversationId: conversation._id,
+      hasBuyerId: !!conversation.buyerId,
+      hasSellerId: !!conversation.sellerId,
+      senderId: senderId
+    });
+
+    let receiverId = null;
+    
+    // ✅ SAFE: Calculate receiverId with validation
+    if (conversation.buyerId && conversation.sellerId) {
+      try {
+        const senderIdStr = senderId.toString();
+        
+        // Safely extract buyer ID
+        const buyerIdStr = conversation.buyerId._id 
+          ? conversation.buyerId._id.toString() 
+          : conversation.buyerId.toString();
+        
+        // Safely extract seller ID
+        const sellerIdStr = conversation.sellerId._id 
+          ? conversation.sellerId._id.toString() 
+          : conversation.sellerId.toString();
+        
+        // Determine receiver
+        receiverId = senderIdStr === buyerIdStr ? sellerIdStr : buyerIdStr;
+        
+        console.log('✅ Receiver determined:', {
+          senderId: senderIdStr,
+          buyerId: buyerIdStr,
+          sellerId: sellerIdStr,
+          receiverId: receiverId
+        });
+      } catch (idError) {
+        console.error('❌ Error extracting IDs:', idError);
+        receiverId = null;
+      }
+    } else {
+      console.warn('⚠️ Conversation missing buyerId or sellerId:', {
+        conversationId: conversation._id,
+        buyerId: conversation.buyerId,
+        sellerId: conversation.sellerId
+      });
+    }
+    
+    // ✅ SAFE: Only update unread count if receiverId is valid
+    if (receiverId && 
+        typeof receiverId === 'string' && 
+        receiverId.trim() !== '' && 
+        receiverId !== 'undefined' && 
+        receiverId !== 'null') {
+      
+      try {
+        const currentUnreadCount = conversation.unreadCounts.get(receiverId) || 0;
+        conversation.unreadCounts.set(receiverId, currentUnreadCount + 1);
+        console.log(`✅ Unread count updated for ${receiverId}: ${currentUnreadCount + 1}`);
+      } catch (mapError) {
+        console.error('❌ Error updating unread count:', {
+          error: mapError.message,
+          receiverId: receiverId,
+          receiverIdType: typeof receiverId
+        });
+      }
+    } else {
+      console.warn('⚠️ Skipping unread count update - invalid receiverId:', {
+        receiverId: receiverId,
+        receiverIdType: typeof receiverId,
+        conversationId: conversation._id
+      });
+    }
+    
+    // Generate message preview text
+    let previewText = '';
+    switch (message.messageType) {
+      case 'text':
+        previewText = message.content?.text || 'Message';
+        break;
+      case 'image':
+        previewText = message.content?.text ? `📷 ${message.content.text}` : '📷 Photo';
+        break;
+      case 'video':
+        previewText = message.content?.text ? `🎥 ${message.content.text}` : '🎥 Video';
+        break;
+      case 'voice':
+        previewText = '🎵 Voice message';
+        break;
+      case 'document':
+        const fileName = message.content?.fileName || 'Document';
+        previewText = `📄 ${fileName}`;
+        break;
+      default:
+        previewText = 'Message';
+    }
+
+    // ✅ SAFE: Extract sender ID
+    let senderObjectId;
+    try {
+      if (typeof message.sender === 'string') {
+        senderObjectId = message.sender;
+      } else if (message.sender && typeof message.sender === 'object' && message.sender._id) {
+        senderObjectId = message.sender._id.toString();
+      } else {
+        senderObjectId = senderId.toString();
+      }
+    } catch (senderError) {
+      console.error('❌ Error extracting sender ID:', senderError);
+      senderObjectId = senderId.toString();
+    }
+
+    // Validate senderObjectId
+    if (!senderObjectId || senderObjectId === 'undefined' || senderObjectId === 'null') {
+      console.error('❌ Invalid senderObjectId, using fallback:', {
+        senderObjectId: senderObjectId,
+        senderId: senderId
+      });
+      senderObjectId = senderId.toString();
+    }
+
+    // Update conversation
+    conversation.lastMessage = {
+      text: previewText,
+      sender: senderObjectId,
+      timestamp: new Date(),
+      messageType: message.messageType
+    };
+    
+    conversation.updatedAt = new Date();
+    
+    try {
+      await conversation.save();
+      console.log(`✅ Conversation ${conversation._id} updated successfully`);
+    } catch (saveError) {
+      console.error('❌ Error saving conversation:', {
+        error: saveError.message,
+        conversationId: conversation._id,
+        unreadCountsKeys: conversation.unreadCounts ? Array.from(conversation.unreadCounts.keys()) : []
+      });
+      throw saveError;
+    }
+    
+  } catch (error) {
+    console.error('❌ Error in updateConversationLastMessage:', {
+      error: error.message,
+      stack: error.stack,
+      conversationId: conversation?._id,
+      senderId: senderId
+    });
+    // Don't throw - let the message be sent even if conversation update fails
+    console.warn('⚠️ Conversation update failed, but message was saved');
+  }
 }
 
 async function emitToParticipants(conversation, payload) {
@@ -668,6 +776,21 @@ router.put('/conversations/:conversationId/read', asyncHandler(async (req, res) 
     const { conversationId } = req.params;
     const { userId } = req.body;
 
+    // ✅ VALIDATE: userId must be provided
+    if (!userId) {
+        return res.status(400).json({
+            success: false,
+            message: "userId is required in request body."
+        });
+    }
+
+    console.log('📖 Mark as read request:', {
+        conversationId,
+        userId,
+        userIdType: typeof userId
+    });
+
+    // Update message statuses
     await Message.updateMany(
         {
             conversationId,
@@ -677,10 +800,37 @@ router.put('/conversations/:conversationId/read', asyncHandler(async (req, res) 
         { status: 'read' }
     );
 
+    // Update conversation unread count
     const conversation = await Conversation.findById(conversationId);
     if (conversation) {
-        conversation.unreadCounts.set(userId, 0);
-        await conversation.save();
+        // ✅ VALIDATE: userId is a valid string before using it as Map key
+        const userIdString = userId.toString();
+        
+        if (userIdString && 
+            userIdString.trim() !== '' && 
+            userIdString !== 'undefined' && 
+            userIdString !== 'null') {
+            
+            try {
+                conversation.unreadCounts.set(userIdString, 0);
+                await conversation.save();
+                console.log(`✅ Unread count cleared for user: ${userIdString}`);
+            } catch (mapError) {
+                console.error('❌ Error updating unread count:', {
+                    error: mapError.message,
+                    userId: userIdString,
+                    userIdType: typeof userIdString
+                });
+            }
+        } else {
+            console.error('❌ Invalid userId for unread count update:', {
+                userId: userId,
+                userIdString: userIdString,
+                userIdType: typeof userId
+            });
+        }
+    } else {
+        console.warn('⚠️ Conversation not found:', conversationId);
     }
 
     res.json({ 

@@ -37,7 +37,9 @@ const io = socketIO(server, {
  */
 async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
   try {
-    // FIX: Query both old and new schema formats
+    console.log(`📡 Broadcasting status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+    
+    // Find conversations - handle both old and new schema
     const conversations = await Conversation.find({
       $or: [
         { participants: userId },
@@ -47,21 +49,34 @@ async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
     }).populate('participants buyerId sellerId', '_id');
 
     const participantIds = new Set();
+    
     conversations.forEach(conv => {
       // Add from participants array
-      conv.participants?.forEach(participant => {
-        const participantId = participant._id.toString();
-        if (participantId !== userId) {
-          participantIds.add(participantId);
-        }
-      });
-      
-      // Add from buyerId/sellerId
-      if (conv.buyerId && conv.buyerId._id.toString() !== userId) {
-        participantIds.add(conv.buyerId._id.toString());
+      if (conv.participants && Array.isArray(conv.participants)) {
+        conv.participants.forEach(participant => {
+          if (participant && participant._id) {
+            const participantId = participant._id.toString();
+            if (participantId !== userId) {
+              participantIds.add(participantId);
+            }
+          }
+        });
       }
-      if (conv.sellerId && conv.sellerId._id.toString() !== userId) {
-        participantIds.add(conv.sellerId._id.toString());
+      
+      // Add from buyerId
+      if (conv.buyerId) {
+        const buyerId = (conv.buyerId._id || conv.buyerId).toString();
+        if (buyerId !== userId) {
+          participantIds.add(buyerId);
+        }
+      }
+      
+      // Add from sellerId
+      if (conv.sellerId) {
+        const sellerId = (conv.sellerId._id || conv.sellerId).toString();
+        if (sellerId !== userId) {
+          participantIds.add(sellerId);
+        }
       }
     });
 
@@ -72,11 +87,18 @@ async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
       timestamp: new Date().toISOString(),
     };
 
+    // Emit to each participant
+    let emittedCount = 0;
     participantIds.forEach(participantId => {
-      io.to(participantId).emit('user_status', statusPayload);
+      try {
+        io.to(participantId).emit('user_status', statusPayload);
+        emittedCount++;
+      } catch (emitError) {
+        console.error(`❌ Failed to emit to ${participantId}:`, emitError.message);
+      }
     });
 
-    console.log(`📡 Broadcasted status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'} to ${participantIds.size} users`);
+    console.log(`📡 Broadcasted status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'} to ${emittedCount}/${participantIds.size} users`);
   } catch (error) {
     console.error('❌ Error broadcasting user status:', error);
   }
@@ -127,12 +149,59 @@ async function handleUserOffline(userId) {
 }
 
 
+
+async function sendCurrentOnlineUsersTo(newUserId) {
+  try {
+    // Find all conversations this user is part of
+    const conversations = await Conversation.find({
+      $or: [
+        { participants: newUserId },
+        { buyerId: newUserId },
+        { sellerId: newUserId }
+      ]
+    }).populate('participants buyerId sellerId', '_id');
+
+    // Get all other participants
+    const participantIds = new Set();
+    conversations.forEach(conv => {
+      conv.participants?.forEach(p => {
+        if (p._id.toString() !== newUserId) {
+          participantIds.add(p._id.toString());
+        }
+      });
+      if (conv.buyerId && conv.buyerId._id.toString() !== newUserId) {
+        participantIds.add(conv.buyerId._id.toString());
+      }
+      if (conv.sellerId && conv.sellerId._id.toString() !== newUserId) {
+        participantIds.add(conv.sellerId._id.toString());
+      }
+    });
+
+    // Get their online statuses
+    const statuses = await UserStatus.find({
+      userId: { $in: Array.from(participantIds) }
+    });
+
+    // Send each status to the new user
+    statuses.forEach(status => {
+      io.to(newUserId).emit('user_status', {
+        userId: status.userId.toString(),
+        isOnline: status.isOnline,
+        lastSeen: status.lastSeen.toISOString(),
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    console.log(`📤 Sent ${statuses.length} online statuses to ${newUserId}`);
+  } catch (error) {
+    console.error('❌ Error sending current online users:', error);
+  }
+}
 // Consolidated Socket.IO connection handling
 
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // Store userId from handshake
   const userId = socket.handshake.headers.userid || socket.handshake.query.userId;
   
   if (!userId) {
@@ -154,8 +223,11 @@ io.on('connection', (socket) => {
       socket.join(userIdToUse);
       console.log(`✅ User ${userIdToUse} joined room`);
 
-      // Set user as online
+      // Set user as online - CRITICAL FIX
       await handleUserOnline(userIdToUse, socket.id);
+
+      // 🆕 IMMEDIATELY send current online users to this user
+      await sendCurrentOnlineUsersTo(userIdToUse);
 
     } catch (error) {
       console.error('❌ Join error:', error);
@@ -178,7 +250,8 @@ io.on('connection', (socket) => {
         { userId: userIdToUse },
         { 
           lastSeen: new Date(),
-          socketId: socket.id 
+          socketId: socket.id,
+          isOnline: true // 🆕 Ensure online status
         }
       );
 
@@ -191,83 +264,90 @@ io.on('connection', (socket) => {
   // ============================================================================
   // MESSAGE ROUTING
   // ============================================================================
-  socket.on('send_message', async (data) => {
-    try {
-      const { 
-        messageId, 
-        conversationId, 
-        senderId, 
-        messageType, 
-        content, 
-        timestamp 
-      } = data;
+socket.on('send_message', async (data) => {
+  try {
+    const { 
+      messageId, 
+      conversationId, 
+      senderId, 
+      messageType, 
+      content, 
+      timestamp 
+    } = data;
 
-      console.log('📡 Message metadata received:', { messageId, conversationId });
+    console.log('📡 Message metadata received:', { messageId, conversationId });
 
-      // Validate required fields
-      if (!messageId || !conversationId || !senderId || !messageType || !content) {
-        socket.emit('message_error', { 
-          error: 'Invalid message metadata',
-          messageId 
-        });
-        return;
-      }
-
-      // Verify conversation and participants
-      const conversation = await Conversation.findById(conversationId)
-        .populate('participants');
-        
-      if (!conversation) {
-        socket.emit('message_error', { 
-          error: 'Conversation not found',
-          messageId 
-        });
-        return;
-      }
-
-      if (!conversation.participants.some(p => p._id.toString() === senderId)) {
-        socket.emit('message_error', { 
-          error: 'Unauthorized sender',
-          messageId 
-        });
-        return;
-      }
-
-      // Send ACK to sender
-      socket.emit('message_sent', {
-        messageId,
-        conversationId,
-        status: 'sent',
-        timestamp: new Date().toISOString(),
-      });
-
-      // Route to other participants
-      conversation.participants.forEach((participant) => {
-        const participantId = participant._id.toString();
-        
-        if (participantId !== senderId) {
-          io.to(participantId).emit('new_message', {
-            messageId,
-            conversationId,
-            senderId,
-            messageType,
-            content,
-            timestamp: timestamp || new Date().toISOString(),
-            status: 'delivered',
-          });
-        }
-      });
-
-      console.log(`✅ Message routed to ${conversation.participants.length - 1} recipients`);
-      
-    } catch (error) {
-      console.error('❌ Message routing error:', error);
+    if (!messageId || !conversationId || !senderId || !messageType || !content) {
       socket.emit('message_error', { 
-        error: error.message,
-        messageId: data.messageId 
+        error: 'Invalid message metadata',
+        messageId 
       });
+      return;
     }
-  });
+
+    const conversation = await Conversation.findById(conversationId)
+      .populate('participants');
+      
+    if (!conversation) {
+      socket.emit('message_error', { 
+        error: 'Conversation not found',
+        messageId 
+      });
+      return;
+    }
+
+    if (!conversation.participants.some(p => p._id.toString() === senderId)) {
+      socket.emit('message_error', { 
+        error: 'Unauthorized sender',
+        messageId 
+      });
+      return;
+    }
+
+    // ✅ Send ACK to sender
+    socket.emit('message_sent', {
+      messageId,
+      conversationId,
+      status: 'sent',
+      timestamp: new Date().toISOString(),
+    });
+
+    // ✅ Route to other participants AND auto-emit delivered
+    conversation.participants.forEach((participant) => {
+      const participantId = participant._id.toString();
+      
+      if (participantId !== senderId) {
+        // Send the new message
+        io.to(participantId).emit('new_message', {
+          messageId,
+          conversationId,
+          senderId,
+          messageType,
+          content,
+          timestamp: timestamp || new Date().toISOString(),
+          status: 'delivered',
+        });
+        
+        // ✅ CRITICAL: Also emit delivered status back to sender
+        io.to(senderId).emit('message_delivered', {
+          messageId,
+          conversationId,
+          status: 'delivered',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
+    console.log(`✅ Message routed and delivered`);
+    
+  } catch (error) {
+    console.error('❌ Message routing error:', error);
+    socket.emit('message_error', { 
+      error: error.message,
+      messageId: data.messageId 
+    });
+  }
+});
 
   // ============================================================================
   // TYPING INDICATOR
@@ -325,49 +405,48 @@ io.on('connection', (socket) => {
   // ============================================================================
   // MARK MESSAGES AS READ
   // ============================================================================
-  socket.on('mark_read', async (data) => {
-    try {
-      const { conversationId, userId: readUserId } = data;
+socket.on('mark_read', async (data) => {
+  try {
+    const { conversationId, userId: readUserId } = data;
 
-      // Update message statuses
-      await Message.updateMany(
-        {
-          conversationId,
-          sender: { $ne: readUserId },
-          status: { $ne: 'read' },
-        },
-        { status: 'read' }
-      );
+    // Update message statuses
+    await Message.updateMany(
+      {
+        conversationId,
+        sender: { $ne: readUserId },
+        status: { $ne: 'read' },
+      },
+      { status: 'read' }
+    );
 
-      // Update conversation unread count
-      const conversation = await Conversation.findById(conversationId)
-        .populate('participants');
-        
-      if (conversation) {
-        conversation.unreadCounts.set(readUserId, 0);
-        await conversation.save();
-
-        // Notify other participants
-        conversation.participants.forEach((participant) => {
-          if (participant._id.toString() !== readUserId) {
-            io.to(participant._id.toString()).emit('messages_read', { 
-              conversationId,
-              userId: readUserId,
-            });
-          }
-        });
-      }
-
-      socket.emit('mark_read_success', { conversationId });
+    // Update conversation unread count
+    const conversation = await Conversation.findById(conversationId)
+      .populate('participants');
       
-    } catch (error) {
-      console.error('❌ Mark read error:', error);
-      socket.emit('error', { 
-        action: 'mark_read', 
-        error: error.message 
+    if (conversation) {
+      conversation.unreadCounts.set(readUserId, 0);
+      await conversation.save();
+
+      // ✅ Notify ALL participants (including sender) about read status
+      conversation.participants.forEach((participant) => {
+        io.to(participant._id.toString()).emit('messages_read', { 
+          conversationId,
+          userId: readUserId,
+          timestamp: new Date().toISOString(),
+        });
       });
     }
-  });
+
+    socket.emit('mark_read_success', { conversationId });
+    
+  } catch (error) {
+    console.error('❌ Mark read error:', error);
+    socket.emit('error', { 
+      action: 'mark_read', 
+      error: error.message 
+    });
+  }
+});
 
   // ============================================================================
   // DELETE CONVERSATION
@@ -400,12 +479,11 @@ io.on('connection', (socket) => {
   // ============================================================================
   // DISCONNECT - User goes offline
   // ============================================================================
-  socket.on('disconnect', async () => {
+ socket.on('disconnect', async () => {
     console.log('🔌 User disconnected:', socket.id);
     
     try {
       if (userId) {
-        // Set user as offline
         await handleUserOffline(userId);
       }
     } catch (error) {
@@ -413,6 +491,7 @@ io.on('connection', (socket) => {
     }
   });
 });
+
 
 
 // Helper function to get message preview text
