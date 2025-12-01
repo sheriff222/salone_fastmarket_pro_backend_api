@@ -199,6 +199,78 @@ async function sendCurrentOnlineUsersTo(newUserId) {
 }
 // Consolidated Socket.IO connection handling
 
+// Track which users are actively viewing which conversations
+const activeChats = new Map(); // { userId: conversationId }
+
+/**
+ * Check if a user is actively viewing a specific conversation
+ */
+function isUserInActiveChat(userId, conversationId) {
+  const activeConv = activeChats.get(userId);
+  const isActive = activeConv === conversationId;
+  console.log(`🔍 User ${userId} active in ${conversationId}? ${isActive} (current: ${activeConv})`);
+  return isActive;
+}
+
+/**
+ * Mark messages as read ONLY if user is actively viewing the chat
+ */
+async function markMessagesAsReadIfActive(conversationId, userId) {
+  try {
+    // ✅ CRITICAL: Only mark as read if user is in active chat
+    if (!isUserInActiveChat(userId, conversationId)) {
+      console.log(`⏭️ User ${userId} NOT in active chat ${conversationId}, skipping mark as read`);
+      return false;
+    }
+
+    console.log(`📖 Marking messages as read for ${userId} in ${conversationId}`);
+
+    // Update message statuses to 'read'
+    const result = await Message.updateMany(
+      {
+        conversationId,
+        sender: { $ne: userId },
+        status: { $in: ['sent', 'delivered'] } // Only update sent/delivered messages
+      },
+      { status: 'read' }
+    );
+
+    console.log(`✅ Marked ${result.modifiedCount} messages as read`);
+
+    // Update conversation unread count to 0
+    const conversation = await Conversation.findById(conversationId)
+      .populate('participants buyerId sellerId');
+      
+    if (conversation) {
+      const userIdString = userId.toString();
+      if (userIdString && userIdString.trim() !== '') {
+        conversation.unreadCounts.set(userIdString, 0);
+        await conversation.save();
+        console.log(`✅ Cleared unread count for ${userId}`);
+      }
+
+      // ✅ Notify ALL participants about read status
+      conversation.participants.forEach((participant) => {
+        io.to(participant._id.toString()).emit('messages_read', { 
+          conversationId,
+          userId: userId,
+          timestamp: new Date().toISOString(),
+        });
+      });
+    }
+
+    return true;
+
+  } catch (error) {
+    console.error('❌ Error marking messages as read:', error);
+    return false;
+  }
+}
+
+// ============================================================================
+// SOCKET.IO CONNECTION HANDLING
+// ============================================================================
+
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
@@ -219,14 +291,10 @@ io.on('connection', (socket) => {
     try {
       const userIdToUse = incomingUserId || userId;
       
-      // Join user's personal room
       socket.join(userIdToUse);
       console.log(`✅ User ${userIdToUse} joined room`);
 
-      // Set user as online - CRITICAL FIX
       await handleUserOnline(userIdToUse, socket.id);
-
-      // 🆕 IMMEDIATELY send current online users to this user
       await sendCurrentOnlineUsersTo(userIdToUse);
 
     } catch (error) {
@@ -239,115 +307,202 @@ io.on('connection', (socket) => {
   });
 
   // ============================================================================
-  // HEARTBEAT - Keep connection alive and update lastSeen
+  // 🆕 ENTER CHAT - User opens a specific conversation
   // ============================================================================
-  socket.on('heartbeat', async (data) => {
+  socket.on('enter_chat', async (data) => {
     try {
-      const { userId: heartbeatUserId } = data;
-      const userIdToUse = heartbeatUserId || userId;
+      const { conversationId, userId: enterUserId } = data;
+      const userIdToUse = enterUserId || userId;
 
-      await UserStatus.findOneAndUpdate(
-        { userId: userIdToUse },
-        { 
-          lastSeen: new Date(),
-          socketId: socket.id,
-          isOnline: true // 🆕 Ensure online status
-        }
-      );
+      console.log(`📂 User ${userIdToUse} ENTERED chat ${conversationId}`);
 
-      console.log(`💓 Heartbeat from ${userIdToUse}`);
+      // Store active chat session
+      activeChats.set(userIdToUse, conversationId);
+
+      // Join conversation-specific room
+      socket.join(`conversation:${conversationId}`);
+
+      // ✅ IMMEDIATELY mark existing messages as read
+      await markMessagesAsReadIfActive(conversationId, userIdToUse);
+
+      // ✅ Notify sender that user entered (ACK)
+      socket.emit('enter_chat_ack', {
+        conversationId,
+        userId: userIdToUse,
+        timestamp: new Date().toISOString()
+      });
+
+      console.log(`✅ User ${userIdToUse} now actively viewing ${conversationId}`);
+
     } catch (error) {
-      console.error('❌ Heartbeat error:', error);
+      console.error('❌ Enter chat error:', error);
+      socket.emit('error', { 
+        action: 'enter_chat',
+        error: error.message 
+      });
     }
   });
 
   // ============================================================================
-  // MESSAGE ROUTING
+  // 🆕 LEAVE CHAT - User exits a specific conversation
   // ============================================================================
-socket.on('send_message', async (data) => {
-  try {
-    const { 
-      messageId, 
-      conversationId, 
-      senderId, 
-      messageType, 
-      content, 
-      timestamp 
-    } = data;
+  socket.on('leave_chat', async (data) => {
+    try {
+      const { conversationId, userId: leaveUserId } = data;
+      const userIdToUse = leaveUserId || userId;
 
-    console.log('📡 Message metadata received:', { messageId, conversationId });
+      console.log(`📂 User ${userIdToUse} LEFT chat ${conversationId}`);
 
-    if (!messageId || !conversationId || !senderId || !messageType || !content) {
-      socket.emit('message_error', { 
-        error: 'Invalid message metadata',
-        messageId 
-      });
-      return;
-    }
-
-    const conversation = await Conversation.findById(conversationId)
-      .populate('participants');
-      
-    if (!conversation) {
-      socket.emit('message_error', { 
-        error: 'Conversation not found',
-        messageId 
-      });
-      return;
-    }
-
-    if (!conversation.participants.some(p => p._id.toString() === senderId)) {
-      socket.emit('message_error', { 
-        error: 'Unauthorized sender',
-        messageId 
-      });
-      return;
-    }
-
-    // ✅ Send ACK to sender
-    socket.emit('message_sent', {
-      messageId,
-      conversationId,
-      status: 'sent',
-      timestamp: new Date().toISOString(),
-    });
-
-    // ✅ Route to other participants AND auto-emit delivered
-    conversation.participants.forEach((participant) => {
-      const participantId = participant._id.toString();
-      
-      if (participantId !== senderId) {
-        // Send the new message
-        io.to(participantId).emit('new_message', {
-          messageId,
-          conversationId,
-          senderId,
-          messageType,
-          content,
-          timestamp: timestamp || new Date().toISOString(),
-          status: 'delivered',
-        });
-        
-        // ✅ CRITICAL: Also emit delivered status back to sender
-        io.to(senderId).emit('message_delivered', {
-          messageId,
-          conversationId,
-          status: 'delivered',
-          timestamp: new Date().toISOString(),
-        });
+      // Remove active chat session
+      const currentActive = activeChats.get(userIdToUse);
+      if (currentActive === conversationId) {
+        activeChats.delete(userIdToUse);
+        console.log(`✅ Cleared active chat for ${userIdToUse}`);
       }
-    });
 
-    console.log(`✅ Message routed and delivered`);
-    
-  } catch (error) {
-    console.error('❌ Message routing error:', error);
-    socket.emit('message_error', { 
-      error: error.message,
-      messageId: data.messageId 
-    });
-  }
-});
+      // Leave conversation-specific room
+      socket.leave(`conversation:${conversationId}`);
+
+      // ✅ Notify sender that user left (ACK)
+      socket.emit('leave_chat_ack', {
+        conversationId,
+        userId: userIdToUse,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Leave chat error:', error);
+    }
+  });
+
+  // ============================================================================
+  // MESSAGE ROUTING with INSTANT READ DETECTION
+  // ============================================================================
+  socket.on('send_message', async (data) => {
+    try {
+      const { 
+        messageId, 
+        conversationId, 
+        senderId, 
+        messageType, 
+        content, 
+        timestamp 
+      } = data;
+
+      console.log('📡 Message metadata received:', { messageId, conversationId });
+
+      if (!messageId || !conversationId || !senderId || !messageType || !content) {
+        socket.emit('message_error', { 
+          error: 'Invalid message metadata',
+          messageId 
+        });
+        return;
+      }
+
+      const conversation = await Conversation.findById(conversationId)
+        .populate('participants buyerId sellerId');
+        
+      if (!conversation) {
+        socket.emit('message_error', { 
+          error: 'Conversation not found',
+          messageId 
+        });
+        return;
+      }
+
+      if (!conversation.participants.some(p => p._id.toString() === senderId)) {
+        socket.emit('message_error', { 
+          error: 'Unauthorized sender',
+          messageId 
+        });
+        return;
+      }
+
+      // ✅ Send ACK to sender
+      socket.emit('message_sent', {
+        messageId,
+        conversationId,
+        status: 'sent',
+        timestamp: new Date().toISOString(),
+      });
+
+      // ✅ Route to other participants
+      conversation.participants.forEach((participant) => {
+        const participantId = participant._id.toString();
+        
+        if (participantId !== senderId) {
+          // 🔍 Check if recipient is actively viewing this chat
+          const isInActiveChat = isUserInActiveChat(participantId, conversationId);
+          
+          // Set status based on active chat state
+          const messageStatus = isInActiveChat ? 'read' : 'delivered';
+          
+          console.log(`📬 Sending to ${participantId}: status=${messageStatus}, inActiveChat=${isInActiveChat}`);
+
+          // Send message with correct status
+          io.to(participantId).emit('new_message', {
+            messageId,
+            conversationId,
+            senderId,
+            messageType,
+            content,
+            timestamp: timestamp || new Date().toISOString(),
+            status: messageStatus,
+          });
+          
+          // ✅ Emit delivered status back to sender
+          io.to(senderId).emit('message_delivered', {
+            messageId,
+            conversationId,
+            status: 'delivered',
+            timestamp: new Date().toISOString(),
+          });
+
+          // ✅ If recipient is in active chat, INSTANTLY mark as read
+          if (isInActiveChat) {
+            console.log(`👀 Recipient ${participantId} is viewing chat - marking as read INSTANTLY`);
+            
+            // Mark message as read in database
+            Message.findByIdAndUpdate(messageId, { status: 'read' })
+              .catch(err => console.error('Failed to update message status:', err));
+
+            // Clear unread count for recipient
+            const recipientIdStr = participantId.toString();
+            if (conversation.unreadCounts && recipientIdStr) {
+              conversation.unreadCounts.set(recipientIdStr, 0);
+              conversation.save().catch(err => console.error('Failed to save conversation:', err));
+            }
+
+            // ✅ Emit read status back to sender INSTANTLY
+            io.to(senderId).emit('message_read', {
+              messageId,
+              conversationId,
+              status: 'read',
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ Also emit general messages_read event
+            conversation.participants.forEach((p) => {
+              io.to(p._id.toString()).emit('messages_read', { 
+                conversationId,
+                userId: participantId,
+                timestamp: new Date().toISOString(),
+              });
+            });
+          }
+        }
+      });
+
+      console.log(`✅ Message routed successfully`);
+      
+    } catch (error) {
+      console.error('❌ Message routing error:', error);
+      socket.emit('message_error', { 
+        error: error.message,
+        messageId: data.messageId 
+      });
+    }
+  });
 
   // ============================================================================
   // TYPING INDICATOR
@@ -403,87 +558,57 @@ socket.on('send_message', async (data) => {
   });
 
   // ============================================================================
-  // MARK MESSAGES AS READ
+  // MANUAL MARK AS READ (legacy support)
   // ============================================================================
-socket.on('mark_read', async (data) => {
-  try {
-    const { conversationId, userId: readUserId } = data;
-
-    // Update message statuses
-    await Message.updateMany(
-      {
-        conversationId,
-        sender: { $ne: readUserId },
-        status: { $ne: 'read' },
-      },
-      { status: 'read' }
-    );
-
-    // Update conversation unread count
-    const conversation = await Conversation.findById(conversationId)
-      .populate('participants');
-      
-    if (conversation) {
-      conversation.unreadCounts.set(readUserId, 0);
-      await conversation.save();
-
-      // ✅ Notify ALL participants (including sender) about read status
-      conversation.participants.forEach((participant) => {
-        io.to(participant._id.toString()).emit('messages_read', { 
-          conversationId,
-          userId: readUserId,
-          timestamp: new Date().toISOString(),
-        });
-      });
-    }
-
-    socket.emit('mark_read_success', { conversationId });
-    
-  } catch (error) {
-    console.error('❌ Mark read error:', error);
-    socket.emit('error', { 
-      action: 'mark_read', 
-      error: error.message 
-    });
-  }
-});
-
-  // ============================================================================
-  // DELETE CONVERSATION
-  // ============================================================================
-  socket.on('delete_conversation', async (data) => {
+  socket.on('mark_read', async (data) => {
     try {
-      const { conversationId, userId: deletingUserId } = data;
-
-      const conversation = await Conversation.findById(conversationId);
-      if (conversation) {
-        conversation.participants.forEach((participantId) => {
-          if (participantId.toString() !== deletingUserId) {
-            io.to(participantId.toString()).emit('conversation_deleted', {
-              conversationId,
-              userId: deletingUserId,
-              timestamp: new Date().toISOString(),
-            });
-          }
-        });
-      }
+      const { conversationId, userId: readUserId } = data;
+      await markMessagesAsReadIfActive(conversationId, readUserId);
+      socket.emit('mark_read_success', { conversationId });
     } catch (error) {
-      console.error('❌ Delete conversation error:', error);
+      console.error('❌ Mark read error:', error);
       socket.emit('error', { 
-        action: 'delete_conversation',
+        action: 'mark_read', 
         error: error.message 
       });
     }
   });
 
   // ============================================================================
+  // HEARTBEAT
+  // ============================================================================
+  socket.on('heartbeat', async (data) => {
+    try {
+      const { userId: heartbeatUserId } = data;
+      const userIdToUse = heartbeatUserId || userId;
+
+      await UserStatus.findOneAndUpdate(
+        { userId: userIdToUse },
+        { 
+          lastSeen: new Date(),
+          socketId: socket.id,
+          isOnline: true
+        }
+      );
+
+      console.log(`💓 Heartbeat from ${userIdToUse}`);
+    } catch (error) {
+      console.error('❌ Heartbeat error:', error);
+    }
+  });
+
+  // ============================================================================
   // DISCONNECT - User goes offline
   // ============================================================================
- socket.on('disconnect', async () => {
+  socket.on('disconnect', async () => {
     console.log('🔌 User disconnected:', socket.id);
     
     try {
       if (userId) {
+        // Clear active chat session
+        activeChats.delete(userId);
+        console.log(`🗑️ Cleared active chat for ${userId}`);
+
         await handleUserOffline(userId);
       }
     } catch (error) {
@@ -579,4 +704,4 @@ server.listen(PORT, HOST, () => {
 });
 
 // Export for use in other modules if needed
-module.exports = { app, io };
+module.exports = { app, io, isUserInActiveChat };
