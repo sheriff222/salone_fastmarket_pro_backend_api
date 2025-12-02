@@ -31,17 +31,32 @@ router.get('/active', asyncHandler(async (req, res) => {
             startDate: { $lte: now },
             endDate: { $gte: now }
         })
-        .populate('targetProductId', 'name price images')
+        .populate('targetProductId', 'name price offerPrice images description') // ✅ ADDED description
         .populate('targetSellerId', 'fullName businessInfo')
         .sort({ priority: -1, createdAt: -1 });
 
+        // ✅ Format posters with product description
+        const formattedPosters = activePosters.map(poster => {
+            const posterObj = poster.toObject();
+            
+            // Add product description to poster if available
+            if (posterObj.targetProductId && posterObj.targetProductId.description) {
+                posterObj.productDescription = posterObj.targetProductId.description;
+            } else {
+                posterObj.productDescription = posterObj.description || 'No description available';
+            }
+            
+            return posterObj;
+        });
+
         // Fallback to existing data if needed
-        if (activePosters.length === 0) {
+        if (formattedPosters.length === 0) {
             const existingPosters = await ExistingPoster.find({});
-            activePosters = existingPosters.map((poster, index) => ({
+            const fallbackPosters = existingPosters.map((poster, index) => ({
                 _id: poster._id,
                 title: poster.posterName || poster.title,
                 description: poster.description || 'Featured Product',
+                productDescription: poster.description || 'No description available',
                 type: 'product',
                 images: [{
                     _id: new mongoose.Types.ObjectId(),
@@ -54,12 +69,18 @@ router.get('/active', asyncHandler(async (req, res) => {
                 viewCount: poster.viewCount || 0,
                 clickCount: poster.clickCount || 0
             }));
+
+            return res.json({ 
+                success: true, 
+                message: "Active posters retrieved successfully.", 
+                data: fallbackPosters
+            });
         }
 
         res.json({ 
             success: true, 
             message: "Active posters retrieved successfully.", 
-            data: activePosters
+            data: formattedPosters
         });
     } catch (error) {
         console.error('Error fetching active posters:', error);
@@ -215,7 +236,7 @@ router.get('/admin/all', asyncHandler(async (req, res) => {
 
         const [posters, total] = await Promise.all([
             Poster.find(query)
-                .populate('targetProductId', 'name price images')
+                .populate('targetProductId', 'name price offerPrice images description') // ✅ ADDED description
                 .populate('targetSellerId', 'fullName businessInfo')
                 .populate('createdBy', 'fullName')
                 .sort({ priority: -1, createdAt: -1 })
@@ -224,11 +245,24 @@ router.get('/admin/all', asyncHandler(async (req, res) => {
             Poster.countDocuments(query)
         ]);
 
+        // ✅ Format with product description
+        const formattedPosters = posters.map(poster => {
+            const posterObj = poster.toObject();
+            
+            if (posterObj.targetProductId && posterObj.targetProductId.description) {
+                posterObj.productDescription = posterObj.targetProductId.description;
+            } else {
+                posterObj.productDescription = posterObj.description || 'No description available';
+            }
+            
+            return posterObj;
+        });
+
         res.json({ 
             success: true, 
             message: "Posters retrieved successfully.", 
             data: {
-                posters,
+                posters: formattedPosters,
                 pagination: {
                     page: pageNum,
                     limit: limitNum,
@@ -242,7 +276,6 @@ router.get('/admin/all', asyncHandler(async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 }));
-
 // Create new poster with Cloudinary
 router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler(async (req, res) => {
     try {
@@ -258,7 +291,6 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
             createdBy
         } = req.body;
 
-        // Validation
         if (!title || !type || !createdBy) {
             return res.status(400).json({
                 success: false,
@@ -287,7 +319,6 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
             });
         }
 
-        // Validate target exists
         if (type === 'product') {
             const product = await Product.findById(targetProductId);
             if (!product) {
@@ -308,7 +339,6 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
             }
         }
 
-        // Upload images to Cloudinary
         console.log(`Uploading ${req.files.length} poster images to Cloudinary...`);
         const images = [];
         
@@ -331,7 +361,6 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
                 console.log(`Uploaded poster image ${i + 1}: ${uploadResult.url}`);
             } catch (uploadError) {
                 console.error(`Failed to upload image ${i + 1}:`, uploadError);
-                // Clean up already uploaded images
                 for (const img of images) {
                     try {
                         await deleteFromCloudinary(img.publicId);
@@ -346,7 +375,6 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
             }
         }
 
-        // Create poster
         const poster = new Poster({
             title,
             description,
@@ -364,7 +392,7 @@ router.post('/admin/create', uploadPosterImages.array('images', 5), asyncHandler
         await poster.save();
 
         await poster.populate([
-            { path: 'targetProductId', select: 'name price images' },
+            { path: 'targetProductId', select: 'name price offerPrice images description' }, // ✅ ADDED description
             { path: 'targetSellerId', select: 'fullName businessInfo' },
             { path: 'createdBy', select: 'fullName' }
         ]);
@@ -569,7 +597,7 @@ router.get('/admin/search-products', asyncHandler(async (req, res) => {
 
         const [products, total] = await Promise.all([
             Product.find(query)
-                .select('name price images proCategoryId sellerName')
+                .select('name price offerPrice images description proCategoryId sellerName') // ✅ ADDED description
                 .populate('proCategoryId', 'name')
                 .skip((pageNum - 1) * limitNum)
                 .limit(limitNum)
@@ -644,7 +672,7 @@ router.get('/admin/search-sellers', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
     try {
         const poster = await Poster.findById(req.params.id)
-            .populate('targetProductId', 'name price images')
+            .populate('targetProductId', 'name price offerPrice images description quantity proCategoryId') // ✅ ADDED description
             .populate('targetSellerId', 'fullName businessInfo')
             .populate('createdBy', 'fullName');
 
@@ -655,10 +683,19 @@ router.get('/:id', asyncHandler(async (req, res) => {
             });
         }
 
+        // ✅ Format with product description
+        const posterObj = poster.toObject();
+        
+        if (posterObj.targetProductId && posterObj.targetProductId.description) {
+            posterObj.productDescription = posterObj.targetProductId.description;
+        } else {
+            posterObj.productDescription = posterObj.description || 'No description available';
+        }
+
         res.json({
             success: true,
             message: "Poster retrieved successfully",
-            data: poster
+            data: posterObj
         });
     } catch (error) {
         console.error('Error fetching poster:', error);
