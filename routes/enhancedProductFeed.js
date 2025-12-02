@@ -50,11 +50,9 @@ router.use(compression({
 router.get('/instant', asyncHandler(async (req, res) => {
   const startTime = Date.now();
   
-  // CACHE KEY - rotates every 5 minutes for "freshness" feel
-  const cacheSlot = Math.floor(Date.now() / 300000); // 5-min slots
-  const cacheKey = `instant_feed_${cacheSlot}`;
+  const cacheSlot = Math.floor(Date.now() / 180000); // 3-min slots
+  const cacheKey = `instant_v2_${cacheSlot}`;
 
-  // CHECK CACHE FIRST
   const cached = instantCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ INSTANT CACHE HIT - ${Date.now() - startTime}ms`);
@@ -62,41 +60,49 @@ router.get('/instant', asyncHandler(async (req, res) => {
   }
 
   try {
-    // FETCH ONLY 6 PRODUCTS - Absolute minimum fields
+    // Fetch ONLY 6 recent products with essential fields
     const products = await Product.find({ quantity: { $gt: 0 } })
-      .select('name price offerPrice images.url') // ONLY essential fields
-      .sort({ createdAt: -1 }) // Recent first
+      .select('name price offerPrice images description quantity proCategoryId sellerId')
+      .populate('proCategoryId', 'name')
+      .populate('sellerId', 'fullName')
+      .sort({ createdAt: -1 })
       .limit(6)
       .lean();
 
-    // MINIMAL RESPONSE
+    // Create ONE section
+    const section = {
+      sectionId: 'instant_featured',
+      title: 'Featured Products',
+      type: 'featured',
+      products: products.map(p => formatProduct(p)),
+      showMore: true, // Always true for instant section
+    };
+
     const response = {
       success: true,
       data: {
-        products: products.map(p => ({
-          _id: p._id,
-          sId: p._id, // Compatibility
-          name: p.name,
-          price: p.price,
-          offerPrice: p.offerPrice,
-          images: p.images?.slice(0, 1) || [], // ONLY first image
-        })),
-        loadTimeMs: Date.now() - startTime
+        sections: [section],
+        metadata: {
+          totalSections: 1,
+          isInstant: true,
+          generatedAt: new Date().toISOString(),
+          loadTimeMs: Date.now() - startTime
+        }
       }
     };
 
-    // CACHE FOR 5 MINUTES
     instantCache.set(cacheKey, response);
-
-    console.log(`✅ INSTANT FEED SERVED - ${Date.now() - startTime}ms`);
+    console.log(`✅ INSTANT FEED - ${Date.now() - startTime}ms`);
     res.json(response);
 
   } catch (error) {
     console.error('❌ Instant feed error:', error);
-    // FALLBACK - Return empty but fast
     res.json({
       success: true,
-      data: { products: [], loadTimeMs: Date.now() - startTime }
+      data: { 
+        sections: [], 
+        metadata: { loadTimeMs: Date.now() - startTime }
+      }
     });
   }
 }));
@@ -113,26 +119,29 @@ router.get('/instant', asyncHandler(async (req, res) => {
  */
 router.get('/complete', asyncHandler(async (req, res) => {
   const startTime = Date.now();
-  const { userId = null, page = 1, categoriesLimit = 5 } = req.query;
+  const { userId = null, page = 1 } = req.query;
   const pageNum = parseInt(page);
-  const categoryLimit = parseInt(categoriesLimit);
 
-  // SMART CACHE KEY - Different for logged-in users
-  const cacheSlot = Math.floor(Date.now() / 300000); // 5-min rotation
+  const cacheSlot = Math.floor(Date.now() / 120000); // 2-min rotation
   const userSegment = userId ? 'logged_in' : 'guest';
-  const cacheKey = `feed_${userSegment}_${pageNum}_${categoryLimit}_${cacheSlot}`;
+  const cacheKey = `feed_complete_${userSegment}_${pageNum}_${cacheSlot}`;
 
-  // CHECK CACHE
-  const cached = instantCache.get(cacheKey);
+  const cached = feedCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ COMPLETE FEED CACHE HIT - ${Date.now() - startTime}ms`);
     return res.json(cached);
   }
 
   try {
-    // PARALLEL FETCH - All sections at once
-    const [sponsoredProducts, recentProducts, allCategories] = await Promise.all([
-      // 1. SPONSORED (if any)
+    // PARALLEL FETCH - Get data for ALL section types
+    const [
+      sponsoredData,
+      recentProductsData,
+      allCategories,
+      trendingData,
+      topViewedData
+    ] = await Promise.all([
+      // Sponsored
       SponsoredProduct.find({
         isActive: true,
         status: 'active',
@@ -141,82 +150,147 @@ router.get('/complete', asyncHandler(async (req, res) => {
       })
         .populate({
           path: 'productId',
-          select: 'name price offerPrice images quantity proCategoryId sellerId',
+          select: 'name price offerPrice images description quantity proCategoryId sellerId',
+          populate: [
+            { path: 'proCategoryId', select: 'name' },
+            { path: 'sellerId', select: 'fullName' }
+          ],
           match: { quantity: { $gt: 0 } },
         })
         .sort({ priority: -1 })
-        .limit(6)
+        .limit(12) // Get more for randomization
         .lean(),
 
-      // 2. RECENT PRODUCTS - Get 30 to randomize from
+      // Recent Products
       Product.find({ quantity: { $gt: 0 } })
-        .select('name price offerPrice images quantity proCategoryId sellerId createdAt')
+        .select('name price offerPrice images description quantity proCategoryId sellerId createdAt')
+        .populate('proCategoryId', 'name')
+        .populate('sellerId', 'fullName')
         .sort({ createdAt: -1 })
-        .limit(30)
+        .limit(20)
         .lean(),
 
-      // 3. ALL CATEGORIES (not just 3!)
-      Category.find().lean()
+      // Categories
+      Category.find().lean(),
+
+      // Trending (last 7 days analytics)
+      getTrendingProductIds(10),
+
+      // Top Viewed (last 30 days)
+      getTopViewedProductIds(10)
     ]);
 
-    // BUILD SECTIONS
-    const sections = [];
+    // BUILD SECTION POOL
+    const sectionPool = [];
 
-    // SECTION 1: Sponsored (if exists)
-    const validSponsored = sponsoredProducts
+    // 1. SPONSORED (if exists)
+    const validSponsored = sponsoredData
       .filter(s => s.productId)
       .map(s => s.productId);
-
+    
     if (validSponsored.length > 0) {
-      sections.push({
+      sectionPool.push({
         sectionId: 'sponsored',
         title: 'Sponsored Products',
         type: 'sponsored',
-        products: validSponsored.slice(0, 6),
-        showMore: false,
+        products: shuffleArray(validSponsored).slice(0, 6),
+        showMore: validSponsored.length > 6,
       });
     }
 
-    // SECTION 2: Recently Added (randomized from pool)
-    const shuffledRecent = shuffleArray(recentProducts).slice(0, 10);
-    sections.push({
-      sectionId: 'recently_added',
-      title: 'Recently Added',
-      type: 'recent',
-      products: shuffledRecent,
-      showMore: true,
-    });
+    // 2. TODAY'S PICKS (random from top viewed)
+    if (topViewedData.length > 0) {
+      const todaysPickProducts = await Product.find({
+        _id: { $in: topViewedData },
+        quantity: { $gt: 0 }
+      })
+        .select('name price offerPrice images description quantity proCategoryId sellerId')
+        .populate('proCategoryId', 'name')
+        .populate('sellerId', 'fullName')
+        .limit(12)
+        .lean();
 
-    // SECTION 3-N: Category sections (parallel fetch)
-    // Shuffle categories for variety on each cache refresh
+      if (todaysPickProducts.length > 0) {
+        sectionPool.push({
+          sectionId: 'todays_picks',
+          title: "Today's Picks",
+          type: 'curated',
+          products: shuffleArray(todaysPickProducts).slice(0, 4),
+          showMore: todaysPickProducts.length > 4,
+        });
+      }
+    }
+
+    // 3. RECENTLY ADDED
+    if (recentProductsData.length > 0) {
+      sectionPool.push({
+        sectionId: 'recently_added',
+        title: 'Recently Added',
+        type: 'recent',
+        products: shuffleArray(recentProductsData).slice(0, 6),
+        showMore: recentProductsData.length > 6,
+      });
+    }
+
+    // 4. TRENDING
+    if (trendingData.length > 0) {
+      const trendingProducts = await Product.find({
+        _id: { $in: trendingData },
+        quantity: { $gt: 0 }
+      })
+        .select('name price offerPrice images description quantity proCategoryId sellerId')
+        .populate('proCategoryId', 'name')
+        .populate('sellerId', 'fullName')
+        .limit(12)
+        .lean();
+
+      if (trendingProducts.length > 0) {
+        sectionPool.push({
+          sectionId: 'trending',
+          title: 'Trending Now',
+          type: 'trending',
+          products: shuffleArray(trendingProducts).slice(0, 5),
+          showMore: trendingProducts.length > 5,
+        });
+      }
+    }
+
+    // 5. RECOMMENDED (if userId exists)
+    if (userId) {
+      const recommendedProducts = await getRecommendedForUser(userId, 12);
+      if (recommendedProducts.length > 0) {
+        sectionPool.push({
+          sectionId: 'recommended',
+          title: 'Just For You',
+          type: 'personalized',
+          products: recommendedProducts.slice(0, 5),
+          showMore: recommendedProducts.length > 5,
+        });
+      }
+    }
+
+    // 6. CATEGORY SECTIONS (3-5 random categories)
     const shuffledCategories = shuffleArray(allCategories);
-    const topCategories = shuffledCategories.slice(0, categoryLimit);
+    const categoriesToShow = shuffledCategories.slice(0, 5);
 
-    const categoryPromises = topCategories.map(async (category) => {
+    const categoryPromises = categoriesToShow.map(async (category) => {
       try {
-        // Fetch products for this category
         const products = await Product.find({
           proCategoryId: category._id,
           quantity: { $gt: 0 }
         })
-          .select('name price offerPrice images quantity proCategoryId sellerId')
+          .select('name price offerPrice images description quantity proCategoryId sellerId')
           .populate('proCategoryId', 'name')
           .populate('sellerId', 'fullName')
-          .limit(12) // Get 12 to randomize
+          .limit(12)
           .lean();
 
-        if (products.length === 0) {
-          console.log(`⚠️ No products found for category: ${category.name}`);
-          return null;
-        }
+        if (products.length === 0) return null;
 
-        // Count total for "showMore"
         const totalCount = await Product.countDocuments({
           proCategoryId: category._id,
           quantity: { $gt: 0 }
         });
-
-        console.log(`✅ Category "${category.name}": ${products.length} products (${totalCount} total)`);
 
         return {
           sectionId: `category_${category._id}`,
@@ -234,19 +308,30 @@ router.get('/complete', asyncHandler(async (req, res) => {
     });
 
     const categorySections = (await Promise.all(categoryPromises)).filter(Boolean);
-    sections.push(...categorySections);
+    sectionPool.push(...categorySections);
 
-    console.log(`📦 Total sections created: ${sections.length} (${categorySections.length} categories)`);
+    // RANDOMIZE SECTION ORDER (except keep sponsored first if exists)
+    let finalSections = [];
+    const sponsoredSection = sectionPool.find(s => s.type === 'sponsored');
+    const otherSections = sectionPool.filter(s => s.type !== 'sponsored');
+    
+    if (sponsoredSection) finalSections.push(sponsoredSection);
+    finalSections.push(...shuffleArray(otherSections));
 
-    // RESPONSE
+    // Format all products
+    finalSections = finalSections.map(section => ({
+      ...section,
+      products: section.products.map(p => formatProduct(p))
+    }));
+
     const response = {
       success: true,
       message: 'Complete feed retrieved',
       data: {
-        sections,
+        sections: finalSections,
         metadata: {
-          totalSections: sections.length,
-          categorySections: categorySections.length,
+          totalSections: finalSections.length,
+          sectionTypes: [...new Set(finalSections.map(s => s.type))],
           generatedAt: new Date().toISOString(),
           userId: userId || 'guest',
           page: pageNum,
@@ -255,10 +340,8 @@ router.get('/complete', asyncHandler(async (req, res) => {
       }
     };
 
-    // CACHE FOR 5 MINUTES
-    instantCache.set(cacheKey, response);
-
-    console.log(`✅ COMPLETE FEED - ${Date.now() - startTime}ms - ${sections.length} sections`);
+    feedCache.set(cacheKey, response);
+    console.log(`✅ COMPLETE FEED - ${Date.now() - startTime}ms - ${finalSections.length} sections`);
     res.json(response);
 
   } catch (error) {
@@ -270,7 +353,6 @@ router.get('/complete', asyncHandler(async (req, res) => {
     });
   }
 }));
-
 /**
  * @route   GET /api/feed/section/:sectionType/all
  * @desc    Load more products for a section (pagination)
@@ -278,38 +360,66 @@ router.get('/complete', asyncHandler(async (req, res) => {
  */
 router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
   const { sectionType } = req.params;
-  const { categoryId = null, page = 1, limit = 10 } = req.query;
+  const { categoryId = null, userId = null, page = 1, limit = 20 } = req.query;
 
   const pageNum = parseInt(page);
   const limitNum = parseInt(limit);
   const skip = (pageNum - 1) * limitNum;
 
   try {
-    let query = { quantity: { $gt: 0 } };
-    
-    // Category filter
-    if (sectionType === 'category' && categoryId) {
-      query.proCategoryId = categoryId;
-    }
+    let products = [];
+    let totalCount = 0;
 
-    // PARALLEL - Fetch products and count
-    const [products, totalCount] = await Promise.all([
-      Product.find(query)
-        .select('name price offerPrice images quantity proCategoryId sellerId')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      
-      Product.countDocuments(query)
-    ]);
+    switch (sectionType) {
+      case 'sponsored':
+        ({ products, totalCount } = await getSponsoredPaginated(skip, limitNum));
+        break;
+
+      case 'curated': // Today's Picks
+        ({ products, totalCount } = await getTodaysPicksPaginated(skip, limitNum));
+        break;
+
+      case 'recent': // Recently Added
+        ({ products, totalCount } = await getRecentlyAddedPaginated(skip, limitNum));
+        break;
+
+      case 'trending':
+        ({ products, totalCount } = await getTrendingPaginated(skip, limitNum));
+        break;
+
+      case 'personalized': // Recommended
+        if (!userId) {
+          return res.status(400).json({
+            success: false,
+            message: 'User ID required for personalized section'
+          });
+        }
+        ({ products, totalCount } = await getRecommendedPaginated(userId, skip, limitNum));
+        break;
+
+      case 'category':
+        if (!categoryId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Category ID required'
+          });
+        }
+        ({ products, totalCount } = await getCategoryProductsPaginated(categoryId, skip, limitNum));
+        break;
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid section type'
+        });
+    }
 
     const totalPages = Math.ceil(totalCount / limitNum);
     const hasMore = pageNum < totalPages;
 
     res.json({
       success: true,
-      data: products,
+      data: products.map(p => formatProduct(p)),
       pagination: {
         currentPage: pageNum,
         totalPages,
@@ -335,10 +445,8 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
  * @access  Public
  */
 router.post('/track', (req, res) => {
-  // INSTANT RESPONSE - Don't wait for DB write
   res.status(200).json({ success: true, message: 'Tracked' });
 
-  // SAVE IN BACKGROUND
   const { productId, action, userId = null, metadata = {} } = req.body;
   
   setImmediate(async () => {
@@ -353,11 +461,28 @@ router.post('/track', (req, res) => {
         timestamp: new Date()
       });
     } catch (error) {
-      console.error('⚠️ Analytics save failed (non-critical):', error.message);
+      console.error('⚠️ Analytics save failed:', error.message);
     }
   });
 });
 
+
+
+function formatProduct(product) {
+  return {
+    _id: product._id,
+    sId: product._id,
+    name: product.name || 'Unnamed Product',
+    description: product.description || 'No description available', // ✅ FIX
+    price: product.price,
+    offerPrice: product.offerPrice,
+    quantity: product.quantity,
+    images: product.images?.slice(0, 2) || [],
+    proCategoryId: product.proCategoryId || null,
+    sellerId: product.sellerId || null,
+    sellerName: product.sellerId?.fullName || product.sellerName || 'Unknown Seller',
+  };
+}
 // UTILITY: Fast array shuffle (Fisher-Yates)
 function shuffleArray(array) {
   const arr = [...array];
@@ -368,6 +493,110 @@ function shuffleArray(array) {
   return arr;
 }
 
+
+async function getTrendingProductIds(limit) {
+  const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  
+  const trending = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: { $in: ['view', 'click'] },
+        timestamp: { $gte: last7Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId',
+        score: { $sum: 1 }
+      }
+    },
+    { $sort: { score: -1 } },
+    { $limit: limit }
+  ]);
+
+  return trending.map(t => t._id);
+}
+
+async function getTopViewedProductIds(limit) {
+  const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  
+  const topViewed = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: 'view',
+        timestamp: { $gte: last30Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId',
+        views: { $sum: 1 }
+      }
+    },
+    { $sort: { views: -1 } },
+    { $limit: limit }
+  ]);
+
+  return topViewed.map(t => t._id);
+}
+
+async function getRecommendedForUser(userId, limit) {
+  try {
+    const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    // Get user's viewed categories
+    const userCategories = await AnalyticsEvent.aggregate([
+      {
+        $match: {
+          userId,
+          action: 'view',
+          timestamp: { $gte: last30Days }
+        }
+      },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'productId',
+          foreignField: '_id',
+          as: 'product'
+        }
+      },
+      { $unwind: '$product' },
+      {
+        $group: {
+          _id: '$product.proCategoryId',
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { count: -1 } },
+      { $limit: 3 }
+    ]);
+
+    console.log(`📊 User ${userId} categories:`, userCategories);
+
+    if (userCategories.length === 0) {
+      return [];
+    }
+
+    const categoryIds = userCategories.map(c => c._id);
+
+    const products = await Product.find({
+      proCategoryId: { $in: categoryIds },
+      quantity: { $gt: 0 }
+    })
+      .select('name price offerPrice images description quantity proCategoryId sellerId')
+      .populate('proCategoryId', 'name')
+      .populate('sellerId', 'fullName')
+      .limit(limit)
+      .lean();
+
+    console.log(`✅ Found ${products.length} recommended products for user ${userId}`);
+    return products;
+  } catch (error) {
+    console.error('❌ Error getting recommended products:', error);
+    return [];
+  }
+}
 
 /**
  * @route   GET /api/feed/section/:sectionName
