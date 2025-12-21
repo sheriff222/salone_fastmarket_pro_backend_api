@@ -319,24 +319,42 @@ io.on('connection', (socket) => {
   // ============================================================================
   // JOIN EVENT - User becomes online
   // ============================================================================
-  socket.on('join', async (incomingUserId) => {
-    try {
-      const userIdToUse = incomingUserId || userId;
-      
-      socket.join(userIdToUse);
-      console.log(`✅ User ${userIdToUse} joined room`);
-
-      await handleUserOnline(userIdToUse, socket.id);
-      await sendCurrentOnlineUsersTo(userIdToUse);
-
-    } catch (error) {
-      console.error('❌ Join error:', error);
+socket.on('join', async (incomingUserId) => {
+  try {
+    // ✅ FIX: Extract just the string ID
+    let userIdToUse;
+    
+    if (typeof incomingUserId === 'string') {
+      userIdToUse = incomingUserId;
+    } else if (typeof incomingUserId === 'object' && incomingUserId.userId) {
+      userIdToUse = incomingUserId.userId;
+    } else if (userId) {
+      userIdToUse = userId;
+    } else {
+      console.error('❌ No valid userId found in join event');
       socket.emit('error', { 
         action: 'join',
-        error: error.message 
+        error: 'Invalid userId format'
       });
+      return;
     }
-  });
+
+    console.log(`✅ Processing join for user: ${userIdToUse} (type: ${typeof userIdToUse})`);
+    
+    socket.join(userIdToUse);
+    console.log(`✅ User ${userIdToUse} joined room`);
+
+    await handleUserOnline(userIdToUse, socket.id);
+    await sendCurrentOnlineUsersTo(userIdToUse);
+
+  } catch (error) {
+    console.error('❌ Join error:', error);
+    socket.emit('error', { 
+      action: 'join',
+      error: error.message 
+    });
+  }
+});
 
   // ============================================================================
   // 🆕 ENTER CHAT - User opens a specific conversation
