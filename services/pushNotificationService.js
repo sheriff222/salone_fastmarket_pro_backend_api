@@ -69,7 +69,7 @@ class PushNotificationService {
         }
       };
 
-      const response = await messaging.sendEachForMultitoken(message);
+      const response = await messaging.sendEachForMultitask(message);
       
       console.log(`✅ Sent to ${response.successCount}/${tokens.length} devices`);
       
