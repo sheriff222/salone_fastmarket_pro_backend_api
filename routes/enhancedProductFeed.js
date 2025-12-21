@@ -803,6 +803,253 @@ router.get('/products/category/:categoryId', asyncHandler(async (req, res) => {
     }
 }));
 
+
+
+async function getSponsoredPaginated(skip, limit) {
+  const sponsored = await SponsoredProduct.find({
+    isActive: true,
+    status: 'active',
+    startDate: { $lte: new Date() },
+    endDate: { $gte: new Date() },
+  })
+    .populate({
+      path: 'productId',
+      select: 'name price offerPrice images description quantity proCategoryId sellerId',
+      populate: [
+        { path: 'proCategoryId', select: 'name' },
+        { path: 'sellerId', select: 'fullName' }
+      ],
+      match: { quantity: { $gt: 0 } },
+    })
+    .sort({ priority: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const totalCount = await SponsoredProduct.countDocuments({
+    isActive: true,
+    status: 'active',
+    startDate: { $lte: new Date() },
+    endDate: { $gte: new Date() },
+  });
+
+  const products = sponsored
+    .filter(s => s.productId)
+    .map(s => s.productId);
+
+  return { products, totalCount };
+}
+
+async function getTodaysPicksPaginated(skip, limit) {
+  const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  
+  const topViewedIds = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: 'view',
+        timestamp: { $gte: last30Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId',
+        views: { $sum: 1 }
+      }
+    },
+    { $sort: { views: -1 } },
+    { $skip: skip },
+    { $limit: limit }
+  ]);
+
+  const productIds = topViewedIds.map(t => t._id);
+  
+  if (productIds.length === 0) {
+    return { products: [], totalCount: 0 };
+  }
+
+  const products = await Product.find({
+    _id: { $in: productIds },
+    quantity: { $gt: 0 }
+  })
+    .select('name price offerPrice images description quantity proCategoryId sellerId')
+    .populate('proCategoryId', 'name')
+    .populate('sellerId', 'fullName')
+    .lean();
+
+  const totalCount = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: 'view',
+        timestamp: { $gte: last30Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId'
+      }
+    },
+    { $count: 'total' }
+  ]);
+
+  return { 
+    products, 
+    totalCount: totalCount[0]?.total || 0 
+  };
+}
+
+async function getRecentlyAddedPaginated(skip, limit) {
+  const products = await Product.find({ 
+    quantity: { $gt: 0 } 
+  })
+    .select('name price offerPrice images description quantity proCategoryId sellerId createdAt')
+    .populate('proCategoryId', 'name')
+    .populate('sellerId', 'fullName')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const totalCount = await Product.countDocuments({ 
+    quantity: { $gt: 0 } 
+  });
+
+  return { products, totalCount };
+}
+
+async function getTrendingPaginated(skip, limit) {
+  const last7Days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const trendingIds = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: { $in: ['view', 'click'] },
+        timestamp: { $gte: last7Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId',
+        score: { $sum: 1 }
+      }
+    },
+    { $sort: { score: -1 } },
+    { $skip: skip },
+    { $limit: limit }
+  ]);
+
+  const productIds = trendingIds.map(t => t._id);
+
+  if (productIds.length === 0) {
+    return { products: [], totalCount: 0 };
+  }
+
+  const products = await Product.find({
+    _id: { $in: productIds },
+    quantity: { $gt: 0 }
+  })
+    .select('name price offerPrice images description quantity proCategoryId sellerId')
+    .populate('proCategoryId', 'name')
+    .populate('sellerId', 'fullName')
+    .lean();
+
+  const totalCount = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        action: { $in: ['view', 'click'] },
+        timestamp: { $gte: last7Days }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId'
+      }
+    },
+    { $count: 'total' }
+  ]);
+
+  return { 
+    products, 
+    totalCount: totalCount[0]?.total || 0 
+  };
+}
+
+async function getRecommendedPaginated(userId, skip, limit) {
+  const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const userCategories = await AnalyticsEvent.aggregate([
+    {
+      $match: {
+        userId,
+        action: 'view',
+        timestamp: { $gte: last30Days }
+      }
+    },
+    {
+      $lookup: {
+        from: 'products',
+        localField: 'productId',
+        foreignField: '_id',
+        as: 'product'
+      }
+    },
+    { $unwind: '$product' },
+    {
+      $group: {
+        _id: '$product.proCategoryId',
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { count: -1 } },
+    { $limit: 3 }
+  ]);
+
+  if (userCategories.length === 0) {
+    return { products: [], totalCount: 0 };
+  }
+
+  const categoryIds = userCategories.map(c => c._id);
+
+  const products = await Product.find({
+    proCategoryId: { $in: categoryIds },
+    quantity: { $gt: 0 }
+  })
+    .select('name price offerPrice images description quantity proCategoryId sellerId')
+    .populate('proCategoryId', 'name')
+    .populate('sellerId', 'fullName')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const totalCount = await Product.countDocuments({
+    proCategoryId: { $in: categoryIds },
+    quantity: { $gt: 0 }
+  });
+
+  return { products, totalCount };
+}
+
+async function getCategoryProductsPaginated(categoryId, skip, limit) {
+  const products = await Product.find({
+    proCategoryId: categoryId,
+    quantity: { $gt: 0 }
+  })
+    .select('name price offerPrice images description quantity proCategoryId sellerId')
+    .populate('proCategoryId', 'name')
+    .populate('sellerId', 'fullName')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const totalCount = await Product.countDocuments({
+    proCategoryId: categoryId,
+    quantity: { $gt: 0 }
+  });
+
+  return { products, totalCount };
+}
+
 // NEW HELPER FUNCTIONS FOR ADDITIONAL SECTIONS
 
 // ... (other imports and routes remain unchanged)

@@ -16,6 +16,11 @@ const {
     formatFileSize
 } = require('../utils/cloudinaryUpload');
 
+const PushNotificationService = require('../services/pushNotificationService');
+const { isUserInActiveChat } = require('../index');
+
+
+
 // Socket.IO import - lazy loading
 let io;
 const getIO = () => {
@@ -355,6 +360,10 @@ router.post('/:messageId/upload',
                 message.sender._id || message.sender
             );
 
+
+            await sendPushNotificationIfNeeded(conversation, message, message.sender._id || message.sender);
+
+
             // Emit via socket
             const socketPayload = {
                 messageId: message._id,
@@ -467,6 +476,9 @@ router.post('/text', asyncHandler(async (req, res) => {
         } catch (convError) {
             console.error('⚠️ Failed to update conversation, but message was saved:', convError.message);
         }
+
+         await emitToParticipants(conversation, socketPayload);
+
 
         const socketPayload = {
             messageId: message._id,
@@ -1028,5 +1040,68 @@ router.delete('/conversations/:conversationId', asyncHandler(async (req, res) =>
         });
     }
 }));
+
+
+
+async function sendPushNotificationIfNeeded(conversation, message, senderId) {
+  try {
+    if (!conversation || !message) return;
+
+    const receiverId = senderId.toString() === (conversation.buyerId?._id || conversation.buyerId).toString()
+      ? (conversation.sellerId?._id || conversation.sellerId).toString()
+      : (conversation.buyerId?._id || conversation.buyerId).toString();
+
+    if (!receiverId) {
+      console.warn('⚠️ Could not determine receiver for push notification');
+      return;
+    }
+
+    // ✅ Check if user is actively viewing this conversation
+    const isUserOnline = isUserInActiveChat(receiverId, conversation._id.toString());
+    
+    if (isUserOnline) {
+      console.log(`👀 User ${receiverId} is actively viewing chat - skipping push notification`);
+      return;
+    }
+
+    // ✅ User is offline or not viewing this chat - send push notification
+    console.log(`📱 Sending push notification to ${receiverId}`);
+
+    let messagePreview = '';
+    switch (message.messageType) {
+      case 'text':
+        messagePreview = message.content?.text || 'New message';
+        break;
+      case 'image':
+        messagePreview = message.content?.text || 'Photo';
+        break;
+      case 'video':
+        messagePreview = message.content?.text || 'Video';
+        break;
+      case 'voice':
+        messagePreview = 'Voice message';
+        break;
+      case 'document':
+        messagePreview = message.content?.fileName || 'Document';
+        break;
+      default:
+        messagePreview = 'New message';
+    }
+
+    await PushNotificationService.sendMessageNotification(
+      senderId,
+      receiverId,
+      conversation._id,
+      messagePreview,
+      message.messageType
+    );
+
+    console.log(`✅ Push notification sent to ${receiverId}`);
+
+  } catch (error) {
+    console.error('❌ Error sending push notification:', error);
+    // Don't throw - notification failure shouldn't break message sending
+  }
+}
 
 module.exports = router;

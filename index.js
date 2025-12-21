@@ -26,9 +26,18 @@ const io = socketIO(server, {
   },
 });
 
+const { initializeFirebase } = require('./config/firebase');
+const NotificationScheduler = require('./services/notificationScheduler');
 
 
 
+try {
+  initializeFirebase();
+  console.log('✅ Firebase Admin SDK initialized');
+} catch (error) {
+  console.error('⚠️ Firebase initialization failed:', error.message);
+  console.error('Push notifications will not work. Check your firebase-service-account.json file.');
+}
 
 
 
@@ -676,6 +685,8 @@ app.use('/favorite', require('./routes/favorites'));
 app.use('/api/sponsored', sponsoredProductRoutes);
 app.use('/bulk', require('./routes/bulkUpload'));
 app.use('/api/search', searchRoutes);
+app.use('/notifications', require('./routes/notifications'));
+
 
 // Example route
 app.get('/', asyncHandler(async (req, res) => {
@@ -701,6 +712,13 @@ server.listen(PORT, HOST, () => {
   console.log(`- Videos: ${path.join(__dirname, 'public/messages/videos')}`);
   console.log(`- Voice: ${path.join(__dirname, 'public/messages/voice')}`);
   console.log(`- Documents: ${path.join(__dirname, 'public/messages/documents')}`);
+
+  try {
+    NotificationScheduler.start();
+    console.log('✅ Notification scheduler started');
+  } catch (error) {
+    console.error('⚠️ Failed to start notification scheduler:', error.message);
+  }
 });
 
 // Export for use in other modules if needed
