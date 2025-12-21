@@ -161,28 +161,51 @@ async function handleUserOffline(userId) {
 
 async function sendCurrentOnlineUsersTo(newUserId) {
   try {
+    // ✅ FIX: Extract just the string ID, not the whole object
+    const newUserIdString = typeof newUserId === 'string' 
+      ? newUserId 
+      : newUserId.userId || newUserId.toString();
+
+    console.log(`📤 Getting online users for: ${newUserIdString}`);
+
     // Find all conversations this user is part of
     const conversations = await Conversation.find({
       $or: [
-        { participants: newUserId },
-        { buyerId: newUserId },
-        { sellerId: newUserId }
+        { participants: newUserIdString },
+        { buyerId: newUserIdString },
+        { sellerId: newUserIdString }
       ]
     }).populate('participants buyerId sellerId', '_id');
 
     // Get all other participants
     const participantIds = new Set();
     conversations.forEach(conv => {
+      // Add from participants array
       conv.participants?.forEach(p => {
-        if (p._id.toString() !== newUserId) {
-          participantIds.add(p._id.toString());
+        const pId = p._id ? p._id.toString() : p.toString();
+        if (pId !== newUserIdString) {
+          participantIds.add(pId);
         }
       });
-      if (conv.buyerId && conv.buyerId._id.toString() !== newUserId) {
-        participantIds.add(conv.buyerId._id.toString());
+      
+      // Add from buyerId
+      if (conv.buyerId) {
+        const buyerId = conv.buyerId._id 
+          ? conv.buyerId._id.toString() 
+          : conv.buyerId.toString();
+        if (buyerId !== newUserIdString) {
+          participantIds.add(buyerId);
+        }
       }
-      if (conv.sellerId && conv.sellerId._id.toString() !== newUserId) {
-        participantIds.add(conv.sellerId._id.toString());
+      
+      // Add from sellerId
+      if (conv.sellerId) {
+        const sellerId = conv.sellerId._id 
+          ? conv.sellerId._id.toString() 
+          : conv.sellerId.toString();
+        if (sellerId !== newUserIdString) {
+          participantIds.add(sellerId);
+        }
       }
     });
 
@@ -193,7 +216,7 @@ async function sendCurrentOnlineUsersTo(newUserId) {
 
     // Send each status to the new user
     statuses.forEach(status => {
-      io.to(newUserId).emit('user_status', {
+      io.to(newUserIdString).emit('user_status', {
         userId: status.userId.toString(),
         isOnline: status.isOnline,
         lastSeen: status.lastSeen.toISOString(),
@@ -201,7 +224,7 @@ async function sendCurrentOnlineUsersTo(newUserId) {
       });
     });
 
-    console.log(`📤 Sent ${statuses.length} online statuses to ${newUserId}`);
+    console.log(`📤 Sent ${statuses.length} online statuses to ${newUserIdString}`);
   } catch (error) {
     console.error('❌ Error sending current online users:', error);
   }

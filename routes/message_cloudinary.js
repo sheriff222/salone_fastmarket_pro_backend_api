@@ -477,9 +477,7 @@ router.post('/text', asyncHandler(async (req, res) => {
             console.error('⚠️ Failed to update conversation, but message was saved:', convError.message);
         }
 
-         await emitToParticipants(conversation, socketPayload);
-
-
+        // ✅ FIX: Define socketPayload BEFORE using it
         const socketPayload = {
             messageId: message._id,
             conversationId: message.conversationId,
@@ -494,6 +492,9 @@ router.post('/text', asyncHandler(async (req, res) => {
                 sellerId: conversation.sellerId?._id || conversation.sellerId
             }
         };
+
+        // ✅ ADD: Send push notification if user is offline
+        await sendPushNotificationIfNeeded(conversation, message, senderId);
 
         await emitToParticipants(conversation, socketPayload);
 
@@ -1056,7 +1057,7 @@ async function sendPushNotificationIfNeeded(conversation, message, senderId) {
       return;
     }
 
-    // ✅ Check if user is actively viewing this conversation
+    // Check if user is actively viewing this conversation
     const isUserOnline = isUserInActiveChat(receiverId, conversation._id.toString());
     
     if (isUserOnline) {
@@ -1064,7 +1065,7 @@ async function sendPushNotificationIfNeeded(conversation, message, senderId) {
       return;
     }
 
-    // ✅ User is offline or not viewing this chat - send push notification
+    // User is offline or not viewing this chat - send push notification
     console.log(`📱 Sending push notification to ${receiverId}`);
 
     let messagePreview = '';
