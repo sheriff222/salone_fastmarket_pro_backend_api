@@ -1,4 +1,4 @@
-// scripts/setupSearchIndexes.js
+/ scripts/setupSearchIndexes.js
 const mongoose = require('mongoose');
 const Product = require('../model/product');
 const Category = require('../model/category');
