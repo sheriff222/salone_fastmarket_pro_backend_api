@@ -17,7 +17,6 @@ const {
 } = require('../utils/cloudinaryUpload');
 
 const PushNotificationService = require('../services/pushNotificationService');
-const { isUserInActiveChat } = require('../index');
 
 
 
@@ -35,6 +34,22 @@ const getIO = () => {
     }
     return io;
 };
+
+
+let _isUserInActiveChat;
+const getIsUserInActiveChat = () => {
+    if (!_isUserInActiveChat) {
+        try {
+            const indexModule = require('../index');
+            _isUserInActiveChat = indexModule.isUserInActiveChat;
+        } catch (error) {
+            console.error('Failed to get isUserInActiveChat:', error);
+            return () => false; // Return a fallback function
+        }
+    }
+    return _isUserInActiveChat;
+};
+
 
 // ============================================================================
 // CONVERSATION ROUTES
@@ -1057,7 +1072,8 @@ async function sendPushNotificationIfNeeded(conversation, message, senderId) {
       return;
     }
 
-    // Check if user is actively viewing this conversation
+    // ✅ FIX: Use lazy-loaded function
+    const isUserInActiveChat = getIsUserInActiveChat();
     const isUserOnline = isUserInActiveChat(receiverId, conversation._id.toString());
     
     if (isUserOnline) {
