@@ -122,7 +122,7 @@ router.get('/complete', asyncHandler(async (req, res) => {
   const { userId = null, page = 1 } = req.query;
   const pageNum = parseInt(page);
 
-  const cacheSlot = Math.floor(Date.now() / 120000); // 2-min rotation
+  const cacheSlot = Math.floor(Date.now() / 120000);
   const userSegment = userId ? 'logged_in' : 'guest';
   const cacheKey = `feed_complete_${userSegment}_${pageNum}_${cacheSlot}`;
 
@@ -133,7 +133,6 @@ router.get('/complete', asyncHandler(async (req, res) => {
   }
 
   try {
-    // PARALLEL FETCH - Get data for ALL section types
     const [
       sponsoredData,
       recentProductsData,
@@ -141,7 +140,6 @@ router.get('/complete', asyncHandler(async (req, res) => {
       trendingData,
       topViewedData
     ] = await Promise.all([
-      // Sponsored
       SponsoredProduct.find({
         isActive: true,
         status: 'active',
@@ -158,10 +156,9 @@ router.get('/complete', asyncHandler(async (req, res) => {
           match: { quantity: { $gt: 0 } },
         })
         .sort({ priority: -1 })
-        .limit(12) // Get more for randomization
+        .limit(12)
         .lean(),
 
-      // Recent Products
       Product.find({ quantity: { $gt: 0 } })
         .select('name price offerPrice images description quantity proCategoryId sellerId createdAt')
         .populate('proCategoryId', 'name')
@@ -170,20 +167,16 @@ router.get('/complete', asyncHandler(async (req, res) => {
         .limit(20)
         .lean(),
 
-      // Categories
       Category.find().lean(),
 
-      // Trending (last 7 days analytics)
       getTrendingProductIds(10),
 
-      // Top Viewed (last 30 days)
       getTopViewedProductIds(10)
     ]);
 
-    // BUILD SECTION POOL
     const sectionPool = [];
 
-    // 1. SPONSORED (if exists)
+    // 1. SPONSORED
     const validSponsored = sponsoredData
       .filter(s => s.productId)
       .map(s => s.productId);
@@ -198,7 +191,7 @@ router.get('/complete', asyncHandler(async (req, res) => {
       });
     }
 
-    // 2. TODAY'S PICKS (random from top viewed)
+    // 2. TODAY'S PICKS
     if (topViewedData.length > 0) {
       const todaysPickProducts = await Product.find({
         _id: { $in: topViewedData },
@@ -255,7 +248,7 @@ router.get('/complete', asyncHandler(async (req, res) => {
       }
     }
 
-    // 5. RECOMMENDED (if userId exists)
+    // 5. RECOMMENDED
     if (userId) {
       const recommendedProducts = await getRecommendedForUser(userId, 12);
       if (recommendedProducts.length > 0) {
@@ -269,36 +262,39 @@ router.get('/complete', asyncHandler(async (req, res) => {
       }
     }
 
-    // 6. CATEGORY SECTIONS (3-5 random categories)
+    // 6. CATEGORY SECTIONS - FIXED WITH TOTAL COUNT
     const shuffledCategories = shuffleArray(allCategories);
     const categoriesToShow = shuffledCategories.slice(0, 5);
 
     const categoryPromises = categoriesToShow.map(async (category) => {
       try {
-        const products = await Product.find({
-          proCategoryId: category._id,
-          quantity: { $gt: 0 }
-        })
-          .select('name price offerPrice images description quantity proCategoryId sellerId')
-          .populate('proCategoryId', 'name')
-          .populate('sellerId', 'fullName')
-          .limit(12)
-          .lean();
-
-        if (products.length === 0) return null;
-
+        // ✅ FIX: Get total count FIRST
         const totalCount = await Product.countDocuments({
           proCategoryId: category._id,
           quantity: { $gt: 0 }
         });
+
+        if (totalCount === 0) return null;
+
+        // Get products for display (6 random)
+        const allProducts = await Product.find({
+          proCategoryId: category._id,
+          quantity: { $gt: 0 }
+        })
+          .select('name price offerPrice images description quantity proCategoryId sellerId createdAt')
+          .populate('proCategoryId', 'name')
+          .populate('sellerId', 'fullName')
+          .sort({ createdAt: -1 }) // ✅ CONSISTENT SORTING
+          .limit(12) // Get more for randomization
+          .lean();
 
         return {
           sectionId: `category_${category._id}`,
           title: category.name,
           type: 'category',
           categoryId: category._id.toString(),
-          products: shuffleArray(products).slice(0, 6),
-          showMore: totalCount > 6,
+          products: shuffleArray(allProducts).slice(0, 6), // Show 6 random
+          showMore: totalCount > 6, // ✅ TRUE if total > 6
           totalProducts: totalCount
         };
       } catch (error) {
@@ -310,7 +306,7 @@ router.get('/complete', asyncHandler(async (req, res) => {
     const categorySections = (await Promise.all(categoryPromises)).filter(Boolean);
     sectionPool.push(...categorySections);
 
-    // RANDOMIZE SECTION ORDER (except keep sponsored first if exists)
+    // Randomize order
     let finalSections = [];
     const sponsoredSection = sectionPool.find(s => s.type === 'sponsored');
     const otherSections = sectionPool.filter(s => s.type !== 'sponsored');
@@ -353,6 +349,7 @@ router.get('/complete', asyncHandler(async (req, res) => {
     });
   }
 }));
+
 /**
  * @route   GET /api/feed/section/:sectionType/all
  * @desc    Load more products for a section (pagination)
@@ -366,25 +363,37 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
   const limitNum = parseInt(limit);
   const skip = (pageNum - 1) * limitNum;
 
+  console.log('');
+  console.log('🔍 ════════════════════════════════════════════════════');
+  console.log('🔍 SECTION PAGINATION REQUEST');
+  console.log(`   Section Type: ${sectionType}`);
+  console.log(`   Category ID: ${categoryId || 'none'}`);
+  console.log(`   User ID: ${userId || 'none'}`);
+  console.log(`   Page: ${pageNum}`);
+  console.log(`   Limit: ${limitNum}`);
+  console.log(`   Skip: ${skip}`);
+  console.log('🔍 ════════════════════════════════════════════════════');
+
   try {
     let products = [];
     let totalCount = 0;
+    let hasMore = false;
 
     switch (sectionType) {
       case 'sponsored':
-        ({ products, totalCount } = await getSponsoredPaginated(skip, limitNum));
+        ({ products, totalCount, hasMore } = await getSponsoredPaginated(skip, limitNum));
         break;
 
       case 'curated': // Today's Picks
-        ({ products, totalCount } = await getTodaysPicksPaginated(skip, limitNum));
+        ({ products, totalCount, hasMore } = await getTodaysPicksPaginated(skip, limitNum));
         break;
 
       case 'recent': // Recently Added
-        ({ products, totalCount } = await getRecentlyAddedPaginated(skip, limitNum));
+        ({ products, totalCount, hasMore } = await getRecentlyAddedPaginated(skip, limitNum));
         break;
 
       case 'trending':
-        ({ products, totalCount } = await getTrendingPaginated(skip, limitNum));
+        ({ products, totalCount, hasMore } = await getTrendingPaginated(skip, limitNum));
         break;
 
       case 'personalized': // Recommended
@@ -394,7 +403,7 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
             message: 'User ID required for personalized section'
           });
         }
-        ({ products, totalCount } = await getRecommendedPaginated(userId, skip, limitNum));
+        ({ products, totalCount, hasMore } = await getRecommendedPaginated(userId, skip, limitNum));
         break;
 
       case 'category':
@@ -404,7 +413,7 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
             message: 'Category ID required'
           });
         }
-        ({ products, totalCount } = await getCategoryProductsPaginated(categoryId, skip, limitNum));
+        ({ products, totalCount, hasMore } = await getCategoryProductsPaginated(categoryId, skip, limitNum));
         break;
 
       default:
@@ -415,7 +424,16 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
     }
 
     const totalPages = Math.ceil(totalCount / limitNum);
-    const hasMore = pageNum < totalPages;
+
+    console.log('');
+    console.log('✅ ════════════════════════════════════════════════════');
+    console.log('✅ PAGINATION RESPONSE');
+    console.log(`   Products returned: ${products.length}`);
+    console.log(`   Total count: ${totalCount}`);
+    console.log(`   Current page: ${pageNum}`);
+    console.log(`   Total pages: ${totalPages}`);
+    console.log(`   Has more: ${hasMore}`);
+    console.log('✅ ════════════════════════════════════════════════════');
 
     res.json({
       success: true,
@@ -425,7 +443,8 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
         totalPages,
         totalProducts: totalCount,
         hasMore,
-        limit: limitNum
+        limit: limitNum,
+        returnedCount: products.length
       }
     });
 
@@ -438,7 +457,6 @@ router.get('/section/:sectionType/all', asyncHandler(async (req, res) => {
     });
   }
 }));
-
 /**
  * @route   POST /api/feed/track
  * @desc    Track analytics (non-blocking, fire-and-forget)
@@ -477,7 +495,7 @@ function formatProduct(product) {
     price: product.price,
     offerPrice: product.offerPrice,
     quantity: product.quantity,
-    images: product.images?.slice(0, 2) || [],
+    images: product.images || [],
     proCategoryId: product.proCategoryId || null,
     sellerId: product.sellerId || null,
     sellerName: product.sellerId?.fullName || product.sellerName || 'Unknown Seller',
@@ -1004,12 +1022,13 @@ async function getRecommendedPaginated(userId, skip, limit) {
   ]);
 
   if (userCategories.length === 0) {
-    return { products: [], totalCount: 0 };
+    return { products: [], totalCount: 0, hasMore: false };
   }
 
   const categoryIds = userCategories.map(c => c._id);
 
-  const products = await Product.find({
+  // Get ALL matching products first
+  const allProducts = await Product.find({
     proCategoryId: { $in: categoryIds },
     quantity: { $gt: 0 }
   })
@@ -1017,37 +1036,49 @@ async function getRecommendedPaginated(userId, skip, limit) {
     .populate('proCategoryId', 'name')
     .populate('sellerId', 'fullName')
     .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
     .lean();
 
-  const totalCount = await Product.countDocuments({
-    proCategoryId: { $in: categoryIds },
-    quantity: { $gt: 0 }
-  });
+  const totalCount = allProducts.length;
+  const products = allProducts.slice(skip, skip + limit);
+  const hasMore = skip + limit < totalCount;
 
-  return { products, totalCount };
+  return { products, totalCount, hasMore };
 }
 
 async function getCategoryProductsPaginated(categoryId, skip, limit) {
-  const products = await Product.find({
-    proCategoryId: categoryId,
-    quantity: { $gt: 0 }
-  })
-    .select('name price offerPrice images description quantity proCategoryId sellerId')
-    .populate('proCategoryId', 'name')
-    .populate('sellerId', 'fullName')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .lean();
+  try {
+    // Get ALL products in this category first
+    const allProducts = await Product.find({
+      proCategoryId: categoryId,
+      quantity: { $gt: 0 }
+    })
+      .select('name price offerPrice images description quantity proCategoryId sellerId createdAt')
+      .populate('proCategoryId', 'name')
+      .populate('sellerId', 'fullName')
+      .sort({ createdAt: -1 }) // Consistent sorting
+      .lean();
 
-  const totalCount = await Product.countDocuments({
-    proCategoryId: categoryId,
-    quantity: { $gt: 0 }
-  });
+    const totalCount = allProducts.length;
 
-  return { products, totalCount };
+    // Apply pagination AFTER getting all products
+    const products = allProducts.slice(skip, skip + limit);
+
+    console.log(`📦 Category ${categoryId} pagination:`);
+    console.log(`   Total products: ${totalCount}`);
+    console.log(`   Skip: ${skip}, Limit: ${limit}`);
+    console.log(`   Returning: ${products.length} products`);
+    console.log(`   Has more: ${skip + limit < totalCount}`);
+
+    return { 
+      products, 
+      totalCount,
+      hasMore: skip + limit < totalCount
+    };
+
+  } catch (error) {
+    console.error('❌ Category pagination error:', error);
+    return { products: [], totalCount: 0, hasMore: false };
+  }
 }
 
 // NEW HELPER FUNCTIONS FOR ADDITIONAL SECTIONS
