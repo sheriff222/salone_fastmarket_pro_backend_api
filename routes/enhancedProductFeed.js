@@ -491,7 +491,7 @@ function formatProduct(product) {
     _id: product._id,
     sId: product._id,
     name: product.name || 'Unnamed Product',
-    description: product.description || 'No description available', // ✅ FIX
+    description: product.description || 'No description available',
     price: product.price,
     offerPrice: product.offerPrice,
     quantity: product.quantity,
@@ -499,6 +499,7 @@ function formatProduct(product) {
     proCategoryId: product.proCategoryId || null,
     sellerId: product.sellerId || null,
     sellerName: product.sellerId?.fullName || product.sellerName || 'Unknown Seller',
+    createdAt: product.createdAt,
   };
 }
 // UTILITY: Fast array shuffle (Fisher-Yates)
@@ -696,6 +697,65 @@ router.get('/section/:sectionName', asyncHandler(async (req, res) => {
 }));
 
 
+
+
+
+
+/**
+ * @route   GET /api/feed/seller/:sellerId/stats
+ * @desc    Get seller statistics including total products count
+ * @access  Public
+ */
+router.get('/seller/:sellerId/stats', asyncHandler(async (req, res) => {
+  const { sellerId } = req.params;
+
+  try {
+    // Get total products count for the seller
+    const totalProducts = await Product.countDocuments({
+      sellerId: sellerId,
+      quantity: { $gt: 0 } // Only count in-stock products
+    });
+
+    // Optional: Get additional stats
+    const [
+      totalSales,
+      avgRating,
+      totalReviews
+    ] = await Promise.all([
+      // If you have orders/sales collection, count them here
+      // Order.countDocuments({ sellerId }),
+      Promise.resolve(0), // Placeholder for now
+
+      // If you have reviews, calculate average rating
+      // Review.aggregate([...])
+      Promise.resolve(4.8), // Placeholder for now
+
+      // If you have reviews, count them
+      // Review.countDocuments({ sellerId })
+      Promise.resolve(0) // Placeholder for now
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Seller stats retrieved successfully',
+      data: {
+        sellerId,
+        totalProducts,
+        totalSales,
+        avgRating,
+        totalReviews
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Seller stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving seller stats',
+      error: error.message
+    });
+  }
+}));
 
 
 /**
