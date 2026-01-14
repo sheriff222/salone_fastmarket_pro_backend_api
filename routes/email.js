@@ -56,6 +56,8 @@ router.get('/stats', async (req, res) => {
       email: { $exists: true, $ne: null, $ne: '' } 
     });
 
+    const domainInfo = emailService.getDomainInfo();
+
     res.json({
       success: true,
       data: {
@@ -64,7 +66,8 @@ router.get('/stats', async (req, res) => {
         usersWithoutEmail: totalUsers - usersWithEmail,
         buyers,
         sellers
-      }
+      },
+      domainInfo
     });
   } catch (error) {
     console.error('Error fetching stats:', error);

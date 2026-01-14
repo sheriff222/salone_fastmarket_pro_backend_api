@@ -12,6 +12,7 @@ class EmailService {
       });
       this.domain = process.env.MAILGUN_DOMAIN;
       console.log('✅ Mailgun initialized');
+      console.log(`📧 Using domain: ${this.domain}`);
     } else {
       console.warn('⚠️ MAILGUN_API_KEY or MAILGUN_DOMAIN not found in environment variables');
     }
@@ -22,42 +23,97 @@ class EmailService {
    */
   async sendSingleEmail({ to, from, subject, html, text }) {
     try {
+      // Skip if email is null or invalid
+      if (!to || !this.isValidEmail(to)) {
+        console.warn(`⚠️ Skipping invalid email: ${to}`);
+        throw new Error(`Invalid email address: ${to}`);
+      }
+
       const messageData = {
-        from: from || process.env.EMAIL_FROM || 'info@salonefastmarket.com',
-        to: [to],
+        from: from || process.env.EMAIL_FROM || 'Salone Fast Market <info@salonefastmarket.com>',
+        to: to,
         subject,
         html: html || text,
-        text: text || html?.replace(/<[^>]*>/g, ''), // Strip HTML for text version
+        text: text || this.stripHtml(html),
       };
 
       const response = await this.mg.messages.create(this.domain, messageData);
       console.log(`✅ Email sent to ${to}`);
       return { success: true, messageId: response.id };
     } catch (error) {
+      // Check if it's a sandbox domain error
+      if (error.message && error.message.includes('Forbidden')) {
+        console.error(`❌ SANDBOX DOMAIN ERROR: ${to} is not an authorized recipient`);
+        console.error('💡 Add this email to authorized recipients in Mailgun dashboard or verify a custom domain');
+        throw new Error(`Sandbox domain: ${to} not authorized. Add to Mailgun authorized recipients list.`);
+      }
       console.error(`❌ Failed to send email to ${to}:`, error.message);
       throw error;
     }
   }
 
   /**
-   * Send bulk emails (Mailgun supports multiple recipients)
+   * Validate email format
+   */
+  isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
+  /**
+   * Strip HTML tags
+   */
+  stripHtml(html) {
+    if (!html) return '';
+    return html.replace(/<[^>]*>/g, '');
+  }
+
+  /**
+   * Send bulk emails (one by one to handle errors gracefully)
    */
   async sendBulkEmail({ recipients, from, subject, html, text }) {
     try {
-      const messageData = {
-        from: from || process.env.EMAIL_FROM || 'info@salonefastmarket.com',
-        to: recipients, // Array of email addresses
-        subject,
-        html: html || text,
-        text: text || html?.replace(/<[^>]*>/g, ''),
+      // Filter out invalid emails
+      const validRecipients = recipients.filter(email => this.isValidEmail(email));
+      
+      if (validRecipients.length === 0) {
+        throw new Error('No valid email addresses provided');
+      }
+
+      console.log(`📧 Sending to ${validRecipients.length} valid recipients`);
+
+      const results = {
+        successful: 0,
+        failed: 0,
+        errors: []
       };
 
-      const response = await this.mg.messages.create(this.domain, messageData);
-      console.log(`✅ Bulk email sent to ${recipients.length} recipients`);
+      // Send emails one by one to handle sandbox restrictions
+      for (const recipient of validRecipients) {
+        try {
+          await this.sendSingleEmail({ to: recipient, from, subject, html, text });
+          results.successful++;
+          
+          // Small delay to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (error) {
+          results.failed++;
+          results.errors.push({
+            email: recipient,
+            error: error.message
+          });
+        }
+      }
+
+      console.log(`✅ Bulk email completed: ${results.successful} successful, ${results.failed} failed`);
+      
       return { 
-        success: true, 
-        recipientCount: recipients.length,
-        messageId: response.id
+        success: results.successful > 0, 
+        recipientCount: validRecipients.length,
+        successful: results.successful,
+        failed: results.failed,
+        errors: results.errors
       };
     } catch (error) {
       console.error('❌ Bulk email failed:', error.message);
@@ -67,9 +123,8 @@ class EmailService {
 
   /**
    * Send emails in batches (for very large recipient lists)
-   * Mailgun recommends max 1000 recipients per message
    */
-  async sendBulkEmailInBatches({ recipients, from, subject, html, text, batchSize = 1000 }) {
+  async sendBulkEmailInBatches({ recipients, from, subject, html, text, batchSize = 100 }) {
     const results = {
       total: recipients.length,
       successful: 0,
@@ -77,14 +132,40 @@ class EmailService {
       errors: []
     };
 
+    // Filter out invalid emails first
+    const validRecipients = recipients.filter(email => this.isValidEmail(email));
+    
+    if (validRecipients.length === 0) {
+      return {
+        ...results,
+        failed: recipients.length,
+        errors: [{ error: 'No valid email addresses found' }]
+      };
+    }
+
+    console.log(`📧 Processing ${validRecipients.length} valid emails out of ${recipients.length} total`);
+
     // Split into batches
-    for (let i = 0; i < recipients.length; i += batchSize) {
-      const batch = recipients.slice(i, i + batchSize);
+    for (let i = 0; i < validRecipients.length; i += batchSize) {
+      const batch = validRecipients.slice(i, i + batchSize);
       
       try {
-        await this.sendBulkEmail({ recipients: batch, from, subject, html, text });
-        results.successful += batch.length;
-        console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} sent (${batch.length} emails)`);
+        const batchResult = await this.sendBulkEmail({ 
+          recipients: batch, 
+          from, 
+          subject, 
+          html, 
+          text 
+        });
+        
+        results.successful += batchResult.successful;
+        results.failed += batchResult.failed;
+        
+        if (batchResult.errors && batchResult.errors.length > 0) {
+          results.errors.push(...batchResult.errors);
+        }
+        
+        console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} completed (${batchResult.successful}/${batch.length} sent)`);
       } catch (error) {
         results.failed += batch.length;
         results.errors.push({
@@ -94,8 +175,8 @@ class EmailService {
         console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} failed`);
       }
 
-      // Small delay between batches to avoid rate limits
-      if (i + batchSize < recipients.length) {
+      // Delay between batches
+      if (i + batchSize < validRecipients.length) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
@@ -104,7 +185,7 @@ class EmailService {
   }
 
   /**
-   * Send personalized emails to multiple recipients using Mailgun's recipient variables
+   * Send personalized emails to multiple recipients
    */
   async sendPersonalizedBulkEmail({ recipients, from, subject, getHtmlContent, getTextContent }) {
     const results = {
@@ -114,9 +195,17 @@ class EmailService {
       errors: []
     };
 
-    // Mailgun supports recipient variables for batch personalization
-    // But for simplicity and full control, we'll send individually
     for (const recipient of recipients) {
+      // Skip if no valid email
+      if (!recipient.email || !this.isValidEmail(recipient.email)) {
+        results.failed++;
+        results.errors.push({
+          email: recipient.email || 'null',
+          error: 'Invalid or missing email address'
+        });
+        continue;
+      }
+
       try {
         const html = getHtmlContent ? getHtmlContent(recipient) : null;
         const text = getTextContent ? getTextContent(recipient) : null;
@@ -139,53 +228,30 @@ class EmailService {
       }
 
       // Small delay to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 150));
     }
 
     return results;
   }
 
   /**
-   * Advanced: Send with Mailgun recipient variables for true batch personalization
+   * Check if using sandbox domain
    */
-  async sendBatchPersonalized({ recipients, from, subject, htmlTemplate, textTemplate }) {
-    try {
-      // Prepare recipient variables
-      const recipientVariables = {};
-      const emails = recipients.map(r => {
-        recipientVariables[r.email] = {
-          fullName: r.fullName,
-          email: r.email,
-          accountType: r.accountType
-        };
-        return r.email;
-      });
+  isSandboxDomain() {
+    return this.domain && this.domain.includes('sandbox');
+  }
 
-      const messageData = {
-        from: from || process.env.EMAIL_FROM || 'info@salonefastmarket.com',
-        to: emails,
-        subject,
-        html: htmlTemplate.replace(/\{fullName\}/g, '%recipient.fullName%')
-                         .replace(/\{email\}/g, '%recipient.email%')
-                         .replace(/\{accountType\}/g, '%recipient.accountType%'),
-        text: textTemplate?.replace(/\{fullName\}/g, '%recipient.fullName%')
-                          .replace(/\{email\}/g, '%recipient.email%')
-                          .replace(/\{accountType\}/g, '%recipient.accountType%'),
-        'recipient-variables': JSON.stringify(recipientVariables)
-      };
-
-      const response = await this.mg.messages.create(this.domain, messageData);
-      console.log(`✅ Batch personalized email sent to ${emails.length} recipients`);
-      
-      return {
-        success: true,
-        recipientCount: emails.length,
-        messageId: response.id
-      };
-    } catch (error) {
-      console.error('❌ Batch personalized email failed:', error.message);
-      throw error;
-    }
+  /**
+   * Get domain info
+   */
+  getDomainInfo() {
+    return {
+      domain: this.domain,
+      isSandbox: this.isSandboxDomain(),
+      warning: this.isSandboxDomain() 
+        ? 'You are using a sandbox domain. You can only send to authorized recipients. Add recipients in Mailgun dashboard or verify a custom domain.'
+        : null
+    };
   }
 }
 
