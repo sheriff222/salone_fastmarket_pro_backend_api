@@ -727,6 +727,7 @@ app.use('/api/sponsored', sponsoredProductRoutes);
 app.use('/bulk', require('./routes/bulkUpload'));
 app.use('/api/search', searchRoutes);
 app.use('/notifications', require('./routes/notifications'));
+app.use('/email', require('./routes/email'));
 
 
 // Example route
