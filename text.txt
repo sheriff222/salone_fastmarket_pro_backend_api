@@ -1,242 +1,47 @@
-): 📨 send_message event: 6948a7ba71f18cb91f2c21b2
-I/flutter (14604): 📨 RECEIVER: Got send_message event
-I/flutter (14604): 📨 === INCOMING MESSAGE ===
-I/flutter (14604):    Raw data: {messageId: 6948a7ba71f18cb91f2c21b2, conversationId: 69481533942a0e8c6f502484, senderId: 68d665c1be5a70d84856e95f, messageType: text, content: {text: hi}, timestamp: 2025-12-22T02:06:50.694Z, status: sent, roleContext: {senderRole: unknown, buyerId: 68d665c1be5a70d84856e95f, sellerId: 68c7764ab6a89e8e8e850461}}
-I/flutter (14604):    messageId: 6948a7ba71f18cb91f2c21b2
-I/flutter (14604):    senderId: 68d665c1be5a70d84856e95f
-I/flutter (14604):    currentUserId: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ✅ This is a message FROM another user TO us
-I/flutter (14604): 🔍 Is 69481533942a0e8c6f502484 active? false
-I/flutter (14604): 📬 WE (receiver) are NOT in chat - showing with badge
-I/flutter (14604): ✅ Incrementing badge: 4 (message from other user in background)
-I/flutter (14604): ✅ Updated conversation, badge: 4
-I/flutter (14604): ✅ Updated conversation in list with new message
-I/flutter (14604): ✅ Incoming message processed successfully
-I/flutter (14604): 
-I/flutter (14604): 📊 Unread count for seller: 5
-I/flutter (14604): 💓 Heartbeat sent
-D/FLTFireMsgReceiver(14604): broadcast received for message
-I/flutter (14604): 📩 Foreground message received
-I/flutter (14604): Title: Moriba
-I/flutter (14604): Body: hi
-I/flutter (14604): Data: {senderId: 68d665c1be5a70d84856e95f, messageType: text, conversationId: 69481533942a0e8c6f502484, screen: messages, type: new_message, timestamp: 2025-12-22T02:06:52.124Z}
-I/flutter (14604): Processing foreground message type: new_message
-I/flutter (14604): Showing notification with smart suggestions
-I/flutter (14604): Smart suggestions generated: [Hello!, Hi there, How can I help?]
-I/flutter (14604): ✅ Notification shown with 3 suggestions
-I/flutter (14604): 💓 Heartbeat sent
-D/SDKManager(14604): ⭐ Castar Status: dispatcher failnull
-D/SDKManager(14604): ⭐ Castar Status: retry=0
-I/flutter (14604): ⭐ Castar SDK: dispatcher failnull
-I/flutter (14604): ⭐ Castar SDK: retry=0
-I/flutter (14604): 💓 Heartbeat sent
-I/flutter (14604): 💓 Heartbeat sent
-I/flutter (14604): 💓 Heartbeat sent
-I/flutter (14604): 💓 Heartbeat sent
-I/FIAM.Display(14604): Unbinding from activity: MainActivity
-I/FIAM.Headless(14604): Removing display event component
-I/flutter (14604): 🔔 Local notification response received
-I/flutter (14604): ActionId: null
-I/flutter (14604): Input: null
-I/flutter (14604): Payload: {"senderId":"68d665c1be5a70d84856e95f","messageType":"text","conversationId":"69481533942a0e8c6f502484","screen":"messages","type":"new_message","timestamp":"2025-12-22T02:06:52.124Z","lastMessage":"hi"}
-I/flutter (14604): 📱 Navigating to chat from notification tap
-I/flutter (14604): 🔔 Handling notification tap...
-I/flutter (14604): Data: {senderId: 68d665c1be5a70d84856e95f, messageType: text, conversationId: 69481533942a0e8c6f502484, screen: messages, type: new_message, timestamp: 2025-12-22T02:06:52.124Z, lastMessage: hi}
-I/flutter (14604): ✅ Navigation initiated to messages
-I/FIAM.Display(14604): Binding to activity: MainActivity
-I/FIAM.Headless(14604): Setting display event component
-[GETX] GOING TO ROUTE /salonefastmarket/home
-[GETX] REMOVING ROUTE /ChatScreen
-[GETX] REMOVING ROUTE /salonefastmarket/home
-D/MultiLinkManager(14604): smart_link is not supported
-I/flutter (14604): ❌ Flutter Error: Looking up a deactivated widget's ancestor is unsafe.
-I/flutter (14604): At this point the state of the widget's element tree is no longer stable.
-I/flutter (14604): To safely refer to a widget's ancestor in its dispose() method, save a reference to the ancestor by calling dependOnInheritedWidgetOfExactType() in the widget's didChangeDependencies() method.
-I/flutter (14604): Stack: #0      Element._debugCheckStateIsActiveForAncestorLookup.<anonymous closure> (package:flutter/src/widgets/framework.dart:4954:9)
-I/flutter (14604): #1      Element._debugCheckStateIsActiveForAncestorLookup (package:flutter/src/widgets/framework.dart:4968:6)
-I/flutter (14604): #2      Element.getElementForInheritedWidgetOfExactType (package:flutter/src/widgets/framework.dart:5004:12)
-I/flutter (14604): #3      Provider._inheritedElementOf (package:provider/src/provider.dart:373:38)
-I/flutter (14604): #4      Provider.of (package:provider/src/provider.dart:327:30)
-I/flutter (14604): #5      _SellerConversationsScreenState.didChangeAppLifecycleState (package:salonefastmarketpro/screen/seller_screen/seller_conversations_screen.dart:76:16)
-I/flutter (14604): #6      WidgetsBinding.handleAppLifecycleStateChanged (package:flutter/src/widgets/binding.dart:1060:16)
-I/flutter (14604): #7      ServicesBinding._handleLifecycleMessage (package:flutter/src/services/binding.dart:306:7)
-I/flutter (14604): #8      BasicMessageChannel.setMessageHandler.<anonymous closure> (package:flutter/src/services/platform_channel.dart:259:49)
-I/flutter (14604): #9      _DefaultBinaryMessenger.setMessageHandler.<anonymous closure> (package:flutter/src/services/binding.dart:653:35)
-I/flutter (14604): #10     _invoke2 (dart:ui/hooks.dart:362:13)
-I/flutter (14604): #11     _ChannelCallbackRecord.invoke (dart:ui/channel_buffers.dart:45:5)
-I/flutter (14604): #12     _Channel.push (dart:ui/channel_buffers.dart:136:31)
-I/flutter (14604): #13     ChannelBuffers.push (dart:ui/channel_buffers.dart:344:17)
-I/flutter (14604): #14     PlatformDispatcher._dispatchPlatformMessage (dart:ui/platform_dispatcher.dart:799:22)
-I/flutter (14604): #15     _dispatchPlatformMessage (dart:ui/hooks.dart:276:31)
-I/flutter (14604): 
-I/flutter (14604): 🔄 Account type changed: null → seller
-I/flutter (14604): 📊 Unread count for seller: 5
-I/flutter (14604): 📱 Found existing dashboard provider
-[GETX] Instance "BottomNavController" has been created
-[GETX] Instance "BottomNavController" has been initialized
-I/flutter (14604): SellerConversationsScreen initializing for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): 🎯 HomeScreen received arguments: {navigateToMessages: true, conversationId: 69481533942a0e8c6f502484, senderId: 68d665c1be5a70d84856e95f, isCurrentUserSeller: true}
-I/flutter (14604): 📱 Pending navigation to messages tab
-I/flutter (14604): ConversationId: 69481533942a0e8c6f502484
-I/flutter (14604): ✅ HomeScreen rebuilt - key: seller_1766369219801
-I/flutter (14604): 📦 Loading products for seller: 68c7764ab6a89e8e8e850461
-I/flutter (14604): User authenticated: alhaji (68c7764ab6a89e8e8e850461) as seller
-I/flutter (14604): 🚀 Initializing MessageProvider...
-I/flutter (14604): 🚀 Initializing MessageRepository...
-I/flutter (14604): 📦 Using cached products: 8
-I/flutter (14604): ✅ Loaded 8 products
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/categories
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/brands
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/variantTypes
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): ✅ MessageRepository initialized successfully
-I/flutter (14604): Socket already connected for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ⚠️ Socket listeners already setup, skipping...
-I/flutter (14604): 📡 Emitted join event for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ✅ MessageProvider initialized successfully
-I/flutter (14604): 📡 User joined: 68c7764ab6a89e8e8e850461
-I/flutter (14604): 📡 Getting conversations for user 68c7764ab6a89e8e8e850461 as seller
-I/flutter (14604): ✅ Successfully parsed product: all products (ID: 6946a75279ccaa249fdd5689, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: powerbank (ID: 69320c8e4b900f6be0a8191d, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: testing again (ID: 69472a9979ccaa249fde0ace, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: necklace bracelet and chain (ID: 6946a7e979ccaa249fdd59c3, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: necklace bracelet and chain (ID: 6946a7e979ccaa249fdd59c3, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): 📋 Returning 17 cached conversations for seller
-I/flutter (14604): SellerConversationsScreen initialized successfully
-I/flutter (14604): ⏸️ Skipping update - transition in progress
-I/flutter (14604): 📊 Unread count for seller: 3
-I/flutter (14604): 📱 Found existing dashboard provider
-I/flutter (14604): SellerConversationsScreen initializing for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ❌ Flutter Error: Looking up a deactivated widget's ancestor is unsafe.
-I/flutter (14604): At this point the state of the widget's element tree is no longer stable.
-I/flutter (14604): To safely refer to a widget's ancestor in its dispose() method, save a reference to the ancestor by calling dependOnInheritedWidgetOfExactType() in the widget's didChangeDependencies() method.
-I/flutter (14604): Stack: #
-I/flutter (14604): 
-I/flutter (14604): 📦 Loading products for seller: 68c7764ab6a89e8e8e850461
-I/flutter (14604): User authenticated: alhaji (68c7764ab6a89e8e8e850461) as seller
-I/flutter (14604): 🚀 Initializing MessageProvider...
-I/flutter (14604): 🚀 Initializing MessageRepository...
-I/flutter (14604): 📦 Using cached products: 8
-I/flutter (14604): ✅ Loaded 8 products
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/categories
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/brands
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 📦 Request headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): 🌐 GET URL: https://salone-fastmarket-backend-api-pro.onrender.com/variantTypes
-I/flutter (14604): 📦 Headers: {Content-Type: application/json, Accept: application/json, Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4Yzc3NjRhYjZhODllOGU4ZTg1MDQ2MSIsImlhdCI6MTc2NjI4NDUyOCwiZXhwIjoxNzY4ODc2NTI4fQ.Oiezl77RvaBtETaT5AvMWb1AREgLUjgGLze0uWg48qc}
-I/flutter (14604): ✅ MessageRepository initialized successfully
-I/flutter (14604): Socket already connected for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ⚠️ Socket listeners already setup, skipping...
-I/flutter (14604): 📡 Emitted join event for user: 68c7764ab6a89e8e8e850461
-I/flutter (14604): ✅ MessageProvider initialized successfully
-I/flutter (14604): 📡 User joined: 68c7764ab6a89e8e8e850461
-I/flutter (14604): 📡 Getting conversations for user 68c7764ab6a89e8e8e850461 as seller
-I/flutter (14604): ✅ Successfully parsed product: all products (ID: 6946a75279ccaa249fdd5689, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: powerbank (ID: 69320c8e4b900f6be0a8191d, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: testing again (ID: 69472a9979ccaa249fde0ace, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: necklace bracelet and chain (ID: 6946a7e979ccaa249fdd59c3, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: necklace bracelet and chain (ID: 6946a7e979ccaa249fdd59c3, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): ✅ Successfully parsed product: inverter and battery charger for sale (ID: 68e616543866b6c435dea7ae, Variants: 0)
-I/flutter (14604): 📋 Returning 17 cached conversations for seller
-I/flutter (14604): SellerConversationsScreen initialized successfully
-I/Choreographer(14604): Skipped 62 frames!  The application may be doing too much work on its main thread.
-I/flutter (14604): ✅ Switched to messages tab
-I/flutter (14604): 💓 Heartbeat sent
-I/flutter (14604): 📊 Unread count for seller: 3
-I/OpenGLRenderer(14604): Davey! duration=1104ms; Flags=0, FrameTimelineVsyncId=4438435, IntendedVsync=112692112910183, Vsync=112693146243537, InputEventId=0, HandleInputStart=112693155080471, AnimationStart=112693155083279, PerformTraversalsStart=112693155084625, DrawStart=112693166618318, FrameDeadline=112692129576850, FrameInterval=112693154876895, FrameStartTime=16666667, SyncQueued=112693166904356, SyncStart=112693167015856, IssueDrawCommandsStart=112693167195202, SwapBuffers=112693214253510, FrameCompleted=112693217971664, DequeueBufferDuration=72616, QueueBufferDuration=912039, GpuCompleted=112693217805625, SwapBuffersCompleted=112693217971664, DisplayPresentTime=1344328957973, 
-I/flutter (14604): ❌ Store products load error: A SellerStoreProvider was used after being disposed.
-I/flutter (14604): Once you have called dispose() on a SellerStoreProvider, it can no longer be used.
-I/flutter (14604): ❌ Platform Error: A SellerStoreProvider was used after being disposed.
-I/flutter (14604): Once you have called dispose() on a SellerStoreProvider, it can no longer be used.
-I/flutter (14604): Stack: #0      ChangeNotifier.debugAssertNotDisposed.<anonymous closure> (package:flutter/src/foundation/change_notifier.dart:182:9)
-I/flutter (14604): #1      ChangeNotifier.debugAssertNotDisposed (package:flutter/src/foundation/change_notifier.dart:189:6)
-I/flutter (14604): #2      ChangeNotifier.notifyListeners (package:flutter/src/foundation/change_notifier.dart:414:27)
-I/flutter (14604): #3      SellerStoreProvider.loadProducts (package:salonefastmarketpro/screen/seller_screen/providers/seller_store_provider.dart:98:7)
-I/flutter (14604): <asynchronous suspension>
-I/flutter (14604): 
-I/flutter (14604): 💓 Heartbeat sent
-I/flutter (14604): ℹ️ User has already made SDK consent decision
-I/flutter (14604): 🚀 Navigating to chat: 69481533942a0e8c6f502484
-I/flutter (14604): ✅ Chat navigation completed
-I/flutter (14604): ❌ Flutter Error: Null check operator used on a null value
-[GETX] GOING TO ROUTE /ChatScreen
-I/flutter (14604): Stack: #0      _HomeScreenState._navigateToPendingChat.<anonymous closure> (package:salonefastmarketpro/screen/home_screen.dart:422:49)
-I/flutter (14604): #1      GetPageRoute._getChild (package:get/get_navigation/src/routes/default_route.dart:110:57)
-I/flutter (14604): #2
-I/flutter (14604): 👤 user_status event: 68901f1f96c82adc1628e50a - false
-I/flutter (14604): 👤 user_status event: 68937607f1360d4fe35e1265 - false
-I/flutter (14604): 👤 user_status event: 68c776ffb6a89e8e8e8504c7 - false
-I/flutter (14604): 👤 user_status event: 68d665c1be5a70d84856e95f - false
-I/flutter (14604): 👤 user_status event: 68d6664dbe5a70d84856ea65 - false
-I/flutter (14604): 👤 user_status event: 68e531880d0f2066fffe5f8f - false
-I/flutter (14604): 👤 user_status event: 68e5395147a57343cee3b75e - false
-I/flutter (14604): 👤 user_status event: 68e979661277193f2afce615 - false
-I/flutter (14604): 👤 user_status event: 68eb5ebf4a222b778c3b1536 - false
-I/flutter (14604): 👤 user_status event: 692ef6d83b5c319f3a6c281e - false
-I/flutter (14604): 👤 user_status event: 692f60161fca1cb8f51a9698 - false
-I/flutter (14604): 👤 user_status event: 69343ca3855204d790e14561 - false
-I/flutter (14604): 👤 user_status event: 6936e1738777bc6119c61fb8 - false
-I/flutter (14604): 👤 user_status event: 69484ba8942a0e8c6f5059cb - false
-I/flutter (14604): 👤 user_status event: 68901f1f96c82adc1628e50a - false
-I/flutter (14604): 👤 user_status event: 68937607f1360d4fe35e1265 - false
-I/flutter (14604): 👤 user_status event: 68c776ffb6a89e8e8e8504c7 - false
-I/flutter (14604): 👤 user_status event: 68d665c1be5a70d84856e95f - false
-I/flutter (14604): 👤 user_status event: 68d6664dbe5a70d84856ea65 - false
-I/flutter (14604): 👤 user_status event: 68e531880d0f2066fffe5f8f - false
-I/flutter (14604): 👤 user_status event: 68e5395147a57343cee3b75e - false
-I/flutter (14604): 👤 user_status event: 68e979661277193f2afce615 - false
-I/flutter (14604): 👤 user_status event: 68eb5ebf4a222b778c3b1536 - false
-I/flutter (14604): 👤 user_status event: 692ef6d83b5c319f3a6c281e - false
-I/flutter (14604): 👤 user_status event: 692f60161fca1cb8f51a9698 - false
-I/flutter (14604): 👤 user_status event: 69343ca3855204d790e14561 - false
-I/flutter (14604): 👤 user_status event: 6936e1738777bc6119c61fb8 - false
-I/flutter (14604): 👤 user_status event: 69484ba8942a0e8c6f5059cb - false
-I/flutter (14604): #151    ComponentElement._firstBuild (package:flutter/src/widgets/framework.dart:5705:5)
-I/flutter (14604
-I/flutter (14604): 
-I/flutter (14604): 📊 Unread count for seller: 3
-I/flutter (14604): 📊 Processing status for 68901f1f96c82adc1628e50a:
-I/flutter (14604):    isOnline: false
-I/flutter (14604):    lastSeen: 2025-10-06T07:04:18.915Z
-I/flutter (14604): 📅 Updated lastSeen for 68901f1f96c82adc1628e50a
-I/flutter (14604): 👤 user_status event: 68901f1f96c82adc1628e50a - false
-I/flutter (14604): 👤 user_status event: 68937607f1360d4fe35e1265 - false
-I/flutter (14604): 👤 user_status event: 68c776ffb6a89e8e8e8504c7 - false
-I/flutter (14604): 👤 user_status event: 68d665c1be5a70d84856e95f - false
-I/flutter (14604): 👤 user_status event: 68d6664dbe5a70d84856ea65 - false
-I/flutter (14604): 👤 user_status event: 68e531880d0f2066fffe5f8f - false
-I/flutter (14604): 👤 user_status event: 68e5395147a57343cee3b75e - false
-I/flutter (14604): 👤 user_status event: 68e979661277193f2afce615 - false
-I/flutter (14604): 👤 user_status event: 68eb5ebf4a222b778c3b1536 - false
-I/flutter (14604): 👤 user_status event: 692ef6d83b5c319f3a6c281e - false
-I/flutter (14604): 👤 user_status event: 692f60161fca1cb8f51a9698 - false
-I/flutter (14604): 👤 user_status event: 69343ca3855204d790e14561 - false
-I/flutter (14604): 👤 user_status event: 6936e1738777bc6119c61fb8 - false
-I/flutter (14604): 👤 user_status event: 69484ba8942a0e8c6f5059cb - false
-I/flutter (14604): 👤 user_status event: 68901f1f96c82adc1628e50a - false
-I/flutter (14604): 👤 user_status event: 68937607f1360d4fe35e1265 - false
-I/flutter (14604): 👤 user_status event: 68c776ffb6a89e8e8e8504c7 - false
-I/flutter (14604): 👤 user_status event: 68d665c1be5a70d84856e95f - false
-I/flutter (14604): 👤 user_status event: 68d6664dbe5a70d84856ea65 - false
-I/flutter (14604): 👤 user_status event: 68e531880d0f2066fffe5f8f - false
-I/flutter (14604): 👤 user_status event: 68e5395147a57343cee3b75e - false
-I/flutter (14604): 👤 user_status event: 68e979661277193f2afce615 - false
-I/flutter (14604): 👤 user_status event: 68eb5ebf4a222b778c3b1536 - false
-I/flutter (14604): 👤 user_status event: 692ef6d83b5c319f3a6c281e - false
-I/flutter (14604): 👤 user_status event: 692f60161fca1cb8f51a9698 - false
-I/flutter (14604): 👤 user_status event: 69343ca3855204d790e14561 - false
-I/flutter (14604): 👤 user_status event: 6936e1738777bc6119c61fb8 - false
-I/flutter (14604): 👤 user_status event: 69484ba8942a0e8c6f5059cb - false
+TASK BRIEF – SFM Product & Store Sharing + App Links Objective Implement product sharing and seller store sharing in the SFM Flutter app using standard HTTPS links, Android App Links, and iOS Universal Links, with login enforced only on actions, not on page views. Firebase Dynamic Links must NOT be used. 1. Link Structure (MANDATORY) Product URLs https://salonefastmarket.com/product/{slug}-{id} Seller Store URLs https://salonefastmarket.com/store/{store-slug} These links must: Open in browser if app is not installed Open directly inside the app if installed Be shareable via WhatsApp, SMS, Facebook, etc. 2. Flutter App Requirements Required Packages share_plus url_launcher app_links 3. Sharing Features (Flutter) Product Sharing Add a Share button on product detail pages Use share_plus to share: Product name Price Product URL Seller Store Sharing Add Share Store in: Seller profile page Seller dashboard Share store URL using share_plus WhatsApp Direct Share Optional button using wa.me + url_launcher 4. Deep Linking (CRITICAL) Flutter Use app_links to listen for incoming links Route: /product/* → ProductDetailsPage /store/* → StorePage DO NOT: Redirect deep links to login Block product/store pages for guests 5. Login Rules (STRICT) Action Login Required View product NO View store NO Share links NO Add to cart YES Buy YES Chat seller YES Seller dashboard YES Post-Login Redirect If user opens a shared link and logs in, they must be returned to that same product or store page. 6. Android App Links Setup AndroidManifest.xml Add intent filters for: https://salonefastmarket.com/product https://salonefastmarket.com/store Backend Create: https://salonefastmarket.com/.well-known/assetlinks.json Include: App package name Release SHA-256 fingerprint 7. iOS Universal Links Setup Backend Create: https://salonefastmarket.com/.well-known/apple-app-site-association Support paths: /product/* /store/* iOS App Enable Associated Domains Add: applinks:salonefastmarket.com 8. Backend Requirements (NON-OPTIONAL) Open Graph Metadata All product and store pages must include: og:title og:description og:image og:url This is required for WhatsApp and Facebook previews. 9. Success Criteria Shared links open correctly in app or web WhatsApp shows product image and details App does NOT force login on open Login happens only on protected actions After login, user returns to original link 10. Explicit Constraints ❌ Firebase Dynamic Links ❌ Login wall on deep link open ❌ Private product/store pages ❌ Link shorteners ✅ Standard HTTPS links ✅ App Links / Universal Links ✅ Action-based authentication If anything above is unclear, implementation must follow mobile commerce best practices, not shortcuts.
+
+
+
+i am using flutter web app at salonefastmarket.com/app and salonefastmarket.com contains the landing page plain html
+Deep links should map directly to feature screens, not app shell routes.
+but they should be unique and seo friendly
+Valid from: Fri Oct 31 02:24:25 GMT 2025 until: Sun Oct 24 02:24:25 GMT 2055
+Certificate fingerprints:
+         SHA1: 43:3B:DD:A0:D8:4E:46:C1:1F:82:CB:D2:15:BE:C8:7F:C8:49:B4:E3
+         SHA256: AE:38:94:F3:11:35:A5:8B:95:F9:81:5F:AE:72:16:62:00:02:7D:04:3A:3A:E2:F1:DD:1F:69:88:72:43:1A:78
+
+i do not have access to ios 
+i have full control of the domain
+i do not know the images are public i will make sure
+if no product image exists just use the apps logo
+yes use the first iamge
+i wan to use seller product screen with all info and prouducts
+navigate to loginscreen itself App:
+* Saves current route + parameters
+* Navigates to `LoginScreen`
+* After successful login:
+   * Return user to exact same screen & state
+   * Continue intended action
+
+yes i cna modify the backend
+iUse full Express routes that fetch from MongoDB and render HTML
+* Let Open Graph do the marketing
+* Share text stays clean and universal
+✅ Recommended Behavior (Industry Standard)
+Flow
+1. Show a skeleton loader while fetching
+2. If API returns 404 / null:
+   * Show “Product Not Found” screen
+   * Provide clear actions
+❌ Do NOT redirect immediately to Home
+❌ Do NOT show a blank page
+❌ Do NOT crash or loop
+
+2. Product Slug Generation
+✅ AUTO-GENERATED from product name
+App Links + Universal Links (no Firebase Dynamic Links)
+no ios mobile link sharing for now
+what do you need 
+do not make assumptions that will lead to error ask me
+
+namespace = "jaf.salone.fastmarket.pro.salonefastmarketpro"

@@ -728,12 +728,110 @@ app.use('/bulk', require('./routes/bulkUpload'));
 app.use('/api/search', searchRoutes);
 app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
+app.use('/.well-known', express.static('.well-known'));
+app.use('/', shareRoutes);
 
+const cors = require('cors');
+app.use(cors({
+  origin: [
+    'https://salonefastmarket.com',
+    'https://www.salonefastmarket.com',
+    'http://localhost:3000', // For local development
+  ],
+  credentials: true,
+}));
 
 // Example route
 app.get('/', asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'API working successfully', data: null });
 }));
+
+
+app.get('/api/products/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const Product = require('./models/Product'); // Adjust path
+    
+    const product = await Product.findById(productId)
+      .populate('sellerId', 'name businessInfo')
+      .populate('subcategoryId', 'name')
+      .lean();
+    
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    
+    res.json(product);
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get seller/user by ID (for deep links)
+app.get('/api/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const User = require('./models/User'); // Adjust path
+    
+    const user = await User.findById(userId)
+      .select('name email businessInfo createdAt phoneNumber')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get seller products
+app.get('/api/products/seller/:sellerId', async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+    const Product = require('./models/Product'); // Adjust path
+    
+    const products = await Product.find({ 
+      sellerId: sellerId,
+      isDeleted: { $ne: true } 
+    })
+      .populate('sellerId', 'name businessInfo')
+      .populate('subcategoryId', 'name')
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    res.json(products);
+  } catch (error) {
+    console.error('Error fetching seller products:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get seller stats
+app.get('/api/sellers/:sellerId/stats', async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+    const Product = require('./models/Product'); // Adjust path
+    
+    const totalProducts = await Product.countDocuments({ 
+      sellerId: sellerId,
+      isDeleted: { $ne: true } 
+    });
+    
+    res.json({
+      totalProducts,
+      totalSales: 0, // Implement if you have sales data
+      totalRevenue: 0, // Implement if you have revenue data
+    });
+  } catch (error) {
+    console.error('Error fetching seller stats:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 // Global error handler
 app.use((error, req, res, next) => {
