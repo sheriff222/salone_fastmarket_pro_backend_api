@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const Product = require('../models/Product'); // Adjust path to your model
-const User = require('../models/User'); // Adjust path to your model
+const Product = require('../model/product'); // Adjust path to your model
+const User = require('../model/user'); // Adjust path to your model
 
 // Helper function to generate HTML with Open Graph metadata
 function generateHTMLWithOG(ogData) {

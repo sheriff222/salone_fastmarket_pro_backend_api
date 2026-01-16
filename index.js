@@ -729,9 +729,8 @@ app.use('/api/search', searchRoutes);
 app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
 app.use('/.well-known', express.static('.well-known'));
-app.use('/', shareRoutes);
+app.use('/', require('./routes/shareRoutes'));
 
-const cors = require('cors');
 app.use(cors({
   origin: [
     'https://salonefastmarket.com',
@@ -750,7 +749,7 @@ app.get('/', asyncHandler(async (req, res) => {
 app.get('/api/products/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
-    const Product = require('./models/Product'); // Adjust path
+    const Product = require('./model/product'); // Adjust path
     
     const product = await Product.findById(productId)
       .populate('sellerId', 'name businessInfo')
@@ -772,7 +771,7 @@ app.get('/api/products/:productId', async (req, res) => {
 app.get('/api/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const User = require('./models/User'); // Adjust path
+    const User = require('./model/user'); // Adjust path
     
     const user = await User.findById(userId)
       .select('name email businessInfo createdAt phoneNumber')
@@ -793,7 +792,7 @@ app.get('/api/users/:userId', async (req, res) => {
 app.get('/api/products/seller/:sellerId', async (req, res) => {
   try {
     const { sellerId } = req.params;
-    const Product = require('./models/Product'); // Adjust path
+    const Product = require('./model/product'); // Adjust path
     
     const products = await Product.find({ 
       sellerId: sellerId,
@@ -815,7 +814,7 @@ app.get('/api/products/seller/:sellerId', async (req, res) => {
 app.get('/api/sellers/:sellerId/stats', async (req, res) => {
   try {
     const { sellerId } = req.params;
-    const Product = require('./models/Product'); // Adjust path
+    const Product = require('./model/product'); // Adjust path
     
     const totalProducts = await Product.countDocuments({ 
       sellerId: sellerId,
