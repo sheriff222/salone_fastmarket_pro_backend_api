@@ -728,7 +728,24 @@ app.use('/bulk', require('./routes/bulkUpload'));
 app.use('/api/search', searchRoutes);
 app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
-app.use('/.well-known', express.static('.well-known'));
+
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json([
+    {
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "jaf.salone.fastmarket.pro.salonefastmarketpro",
+        "sha256_cert_fingerprints": [
+          "AE:38:94:F3:11:35:A5:8B:95:F9:81:5F:AE:72:16:62:00:02:7D:04:3A:3A:E2:F1:DD:1F:69:88:72:43:1A:78"
+        ]
+      }
+    }
+  ]);
+});
+
 app.use('/', require('./routes/shareRoutes'));
 app.use('/api', require('./routes/api'));
 
