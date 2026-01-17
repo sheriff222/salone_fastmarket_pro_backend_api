@@ -730,6 +730,7 @@ app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
 app.use('/.well-known', express.static('.well-known'));
 app.use('/', require('./routes/shareRoutes'));
+app.use('/api', require('./routes/api'));
 
 app.use(cors({
   origin: [
