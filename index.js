@@ -817,7 +817,7 @@ app.get('/api/products/seller/:sellerId', async (req, res) => {
       isDeleted: { $ne: true } 
     })
       .populate('sellerId', 'name businessInfo')
-      .populate('subcategoryId', 'name')
+      .populate('proSubcategoryId', 'name')
       .sort({ createdAt: -1 })
       .lean();
     
