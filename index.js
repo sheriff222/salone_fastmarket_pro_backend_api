@@ -771,7 +771,7 @@ app.get('/api/products/:productId', async (req, res) => {
     
     const product = await Product.findById(productId)
       .populate('sellerId', 'name businessInfo')
-      .populate('subcategoryId', 'name')
+      .populate('proSubCategoryId', 'name')
       .lean();
     
     if (!product) {

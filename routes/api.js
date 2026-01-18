@@ -20,7 +20,7 @@ router.get('/api/products/:productId', async (req, res) => {
     
     const product = await Product.findById(productId)
       .populate('sellerId', 'name email businessInfo createdAt')
-      .populate('subcategoryId', 'name')
+      .populate('proSubCategoryId', 'name')
       .populate('categoryId', 'name')
       .lean();
     
