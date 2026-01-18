@@ -60,14 +60,14 @@ router.get('/api/products/seller/:sellerId', async (req, res) => {
       sellerId: sellerId,
       isDeleted: { $ne: true } 
     })
-      .populate('proCategoryId', 'name')       // ✅ CORRECT
-      .populate('proSubCategoryId', 'name')    // ✅ CORRECT
+      .populate('proCategoryId', 'name')      // ✅ KEEP
+      .populate('proSubCategoryId', 'name')   // ✅ KEEP  
       .populate('proBrandId', 'name')
-      .populate('sellerId', 'fullName email businessInfo')
+      .populate('sellerId', 'fullName email businessInfo createdAt') // ✅ ADD createdAt
       .sort({ createdAt: -1 })
       .lean();
     
-    console.log(`✅ Found ${products.length} products`);
+    console.log(`✅ Found ${products.length} products for seller ${sellerId}`);
     
     res.json(products);  // Just return array
   } catch (error) {
@@ -75,7 +75,6 @@ router.get('/api/products/seller/:sellerId', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // ============================================================================
 // USER/SELLER ENDPOINTS
 // ============================================================================
