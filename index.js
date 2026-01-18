@@ -810,20 +810,26 @@ app.get('/api/users/:userId', async (req, res) => {
 app.get('/api/products/seller/:sellerId', async (req, res) => {
   try {
     const { sellerId } = req.params;
-    const Product = require('./model/product'); // Adjust path
+    const Product = require('./model/product');
+    
+    console.log(`📦 Fetching products for seller: ${sellerId}`); // ADD THIS
     
     const products = await Product.find({ 
       sellerId: sellerId,
       isDeleted: { $ne: true } 
     })
-      .populate('sellerId', 'name businessInfo')
-      .populate('proSubcategoryId', 'name')
+      .populate('proCategoryId', 'name')       // ✅ FIX
+      .populate('proSubCategoryId', 'name')    // ✅ FIX (capital C)
+      .populate('proBrandId', 'name')
+      .populate('sellerId', 'fullName email businessInfo createdAt')
       .sort({ createdAt: -1 })
       .lean();
     
+    console.log(`✅ Found ${products.length} products`); // ADD THIS
+    
     res.json(products);
   } catch (error) {
-    console.error('Error fetching seller products:', error);
+    console.error('❌ Error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
