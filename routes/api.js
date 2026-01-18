@@ -55,47 +55,24 @@ router.get('/api/products/:productId', async (req, res) => {
 router.get('/api/products/seller/:sellerId', async (req, res) => {
   try {
     const { sellerId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
-    
-    console.log(`📦 Fetching products for seller: ${sellerId}`);
-    
-    const skip = (parseInt(page) - 1) * parseInt(limit);
     
     const products = await Product.find({ 
       sellerId: sellerId,
       isDeleted: { $ne: true } 
     })
-      .populate('sellerId', 'name email businessInfo')
-      .populate('subcategoryId', 'name')
+      .populate('proCategoryId', 'name')       // ✅ CORRECT
+      .populate('proSubCategoryId', 'name')    // ✅ CORRECT
+      .populate('proBrandId', 'name')
+      .populate('sellerId', 'fullName email businessInfo')
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .lean();
     
-    const totalProducts = await Product.countDocuments({ 
-      sellerId: sellerId,
-      isDeleted: { $ne: true } 
-    });
+    console.log(`✅ Found ${products.length} products`);
     
-    console.log(`✅ Found ${products.length} products for seller`);
-    
-    res.json({
-      success: true,
-      products,
-      pagination: {
-        total: totalProducts,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(totalProducts / parseInt(limit))
-      }
-    });
+    res.json(products);  // Just return array
   } catch (error) {
-    console.error('❌ Error fetching seller products:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Server error',
-      error: error.message 
-    });
+    console.error('❌ Error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
