@@ -812,14 +812,14 @@ app.get('/api/products/seller/:sellerId', async (req, res) => {
     const { sellerId } = req.params;
     const Product = require('./model/product');
     
-    console.log(`📦 Fetching products for seller: ${sellerId}`); // ADD THIS
+    console.log(`📦 Fetching products for seller: ${sellerId}`);
     
     const products = await Product.find({ 
       sellerId: sellerId,
       isDeleted: { $ne: true } 
     })
-      .populate('proCategoryId', 'name')       // ✅ FIX
-      .populate('proSubCategoryId', 'name')    // ✅ FIX (capital C)
+      .populate('proCategoryId', 'name')      
+      .populate('proSubCategoryId', 'name')   
       .populate('proBrandId', 'name')
       .populate('sellerId', 'fullName email businessInfo createdAt')
       .sort({ createdAt: -1 })
