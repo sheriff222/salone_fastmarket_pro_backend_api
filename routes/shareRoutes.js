@@ -52,7 +52,7 @@ function generateHTMLWithOG(ogData) {
 // ✅ PRODUCT ROUTE - Fixed
 router.get('/product/:slugWithId', async (req, res) => {
   try {
-    const productId = req.params.slugWithId; // Just use the ID directly
+    const productId = req.params.slugWithId; 
     
     console.log(`📦 Fetching product: ${productId}`);
     

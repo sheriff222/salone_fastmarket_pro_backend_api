@@ -47,7 +47,7 @@ try {
 async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
   try {
     console.log(`📡 Broadcasting status for ${userId}: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
-    
+
     // Find conversations - handle both old and new schema
     const conversations = await Conversation.find({
       $or: [
@@ -58,7 +58,7 @@ async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
     }).populate('participants buyerId sellerId', '_id');
 
     const participantIds = new Set();
-    
+
     conversations.forEach(conv => {
       // Add from participants array
       if (conv.participants && Array.isArray(conv.participants)) {
@@ -71,7 +71,7 @@ async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
           }
         });
       }
-      
+
       // Add from buyerId
       if (conv.buyerId) {
         const buyerId = (conv.buyerId._id || conv.buyerId).toString();
@@ -79,7 +79,7 @@ async function broadcastUserStatus(userId, isOnline, lastSeen = new Date()) {
           participantIds.add(buyerId);
         }
       }
-      
+
       // Add from sellerId
       if (conv.sellerId) {
         const sellerId = (conv.sellerId._id || conv.sellerId).toString();
@@ -162,8 +162,8 @@ async function handleUserOffline(userId) {
 async function sendCurrentOnlineUsersTo(newUserId) {
   try {
     // ✅ FIX: Extract just the string ID, not the whole object
-    const newUserIdString = typeof newUserId === 'string' 
-      ? newUserId 
+    const newUserIdString = typeof newUserId === 'string'
+      ? newUserId
       : newUserId.userId || newUserId.toString();
 
     console.log(`📤 Getting online users for: ${newUserIdString}`);
@@ -187,21 +187,21 @@ async function sendCurrentOnlineUsersTo(newUserId) {
           participantIds.add(pId);
         }
       });
-      
+
       // Add from buyerId
       if (conv.buyerId) {
-        const buyerId = conv.buyerId._id 
-          ? conv.buyerId._id.toString() 
+        const buyerId = conv.buyerId._id
+          ? conv.buyerId._id.toString()
           : conv.buyerId.toString();
         if (buyerId !== newUserIdString) {
           participantIds.add(buyerId);
         }
       }
-      
+
       // Add from sellerId
       if (conv.sellerId) {
-        const sellerId = conv.sellerId._id 
-          ? conv.sellerId._id.toString() 
+        const sellerId = conv.sellerId._id
+          ? conv.sellerId._id.toString()
           : conv.sellerId.toString();
         if (sellerId !== newUserIdString) {
           participantIds.add(sellerId);
@@ -272,7 +272,7 @@ async function markMessagesAsReadIfActive(conversationId, userId) {
     // Update conversation unread count to 0
     const conversation = await Conversation.findById(conversationId)
       .populate('participants buyerId sellerId');
-      
+
     if (conversation) {
       const userIdString = userId.toString();
       if (userIdString && userIdString.trim() !== '') {
@@ -283,7 +283,7 @@ async function markMessagesAsReadIfActive(conversationId, userId) {
 
       // ✅ Notify ALL participants about read status
       conversation.participants.forEach((participant) => {
-        io.to(participant._id.toString()).emit('messages_read', { 
+        io.to(participant._id.toString()).emit('messages_read', {
           conversationId,
           userId: userId,
           timestamp: new Date().toISOString(),
@@ -307,7 +307,7 @@ io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
   const userId = socket.handshake.headers.userid || socket.handshake.query.userId;
-  
+
   if (!userId) {
     console.error('❌ No userId provided in connection');
     socket.disconnect();
@@ -319,42 +319,42 @@ io.on('connection', (socket) => {
   // ============================================================================
   // JOIN EVENT - User becomes online
   // ============================================================================
-socket.on('join', async (incomingUserId) => {
-  try {
-    // ✅ FIX: Extract just the string ID
-    let userIdToUse;
-    
-    if (typeof incomingUserId === 'string') {
-      userIdToUse = incomingUserId;
-    } else if (typeof incomingUserId === 'object' && incomingUserId.userId) {
-      userIdToUse = incomingUserId.userId;
-    } else if (userId) {
-      userIdToUse = userId;
-    } else {
-      console.error('❌ No valid userId found in join event');
-      socket.emit('error', { 
+  socket.on('join', async (incomingUserId) => {
+    try {
+      // ✅ FIX: Extract just the string ID
+      let userIdToUse;
+
+      if (typeof incomingUserId === 'string') {
+        userIdToUse = incomingUserId;
+      } else if (typeof incomingUserId === 'object' && incomingUserId.userId) {
+        userIdToUse = incomingUserId.userId;
+      } else if (userId) {
+        userIdToUse = userId;
+      } else {
+        console.error('❌ No valid userId found in join event');
+        socket.emit('error', {
+          action: 'join',
+          error: 'Invalid userId format'
+        });
+        return;
+      }
+
+      console.log(`✅ Processing join for user: ${userIdToUse} (type: ${typeof userIdToUse})`);
+
+      socket.join(userIdToUse);
+      console.log(`✅ User ${userIdToUse} joined room`);
+
+      await handleUserOnline(userIdToUse, socket.id);
+      await sendCurrentOnlineUsersTo(userIdToUse);
+
+    } catch (error) {
+      console.error('❌ Join error:', error);
+      socket.emit('error', {
         action: 'join',
-        error: 'Invalid userId format'
+        error: error.message
       });
-      return;
     }
-
-    console.log(`✅ Processing join for user: ${userIdToUse} (type: ${typeof userIdToUse})`);
-    
-    socket.join(userIdToUse);
-    console.log(`✅ User ${userIdToUse} joined room`);
-
-    await handleUserOnline(userIdToUse, socket.id);
-    await sendCurrentOnlineUsersTo(userIdToUse);
-
-  } catch (error) {
-    console.error('❌ Join error:', error);
-    socket.emit('error', { 
-      action: 'join',
-      error: error.message 
-    });
-  }
-});
+  });
 
   // ============================================================================
   // 🆕 ENTER CHAT - User opens a specific conversation
@@ -386,9 +386,9 @@ socket.on('join', async (incomingUserId) => {
 
     } catch (error) {
       console.error('❌ Enter chat error:', error);
-      socket.emit('error', { 
+      socket.emit('error', {
         action: 'enter_chat',
-        error: error.message 
+        error: error.message
       });
     }
   });
@@ -430,40 +430,40 @@ socket.on('join', async (incomingUserId) => {
   // ============================================================================
   socket.on('send_message', async (data) => {
     try {
-      const { 
-        messageId, 
-        conversationId, 
-        senderId, 
-        messageType, 
-        content, 
-        timestamp 
+      const {
+        messageId,
+        conversationId,
+        senderId,
+        messageType,
+        content,
+        timestamp
       } = data;
 
       console.log('📡 Message metadata received:', { messageId, conversationId });
 
       if (!messageId || !conversationId || !senderId || !messageType || !content) {
-        socket.emit('message_error', { 
+        socket.emit('message_error', {
           error: 'Invalid message metadata',
-          messageId 
+          messageId
         });
         return;
       }
 
       const conversation = await Conversation.findById(conversationId)
         .populate('participants buyerId sellerId');
-        
+
       if (!conversation) {
-        socket.emit('message_error', { 
+        socket.emit('message_error', {
           error: 'Conversation not found',
-          messageId 
+          messageId
         });
         return;
       }
 
       if (!conversation.participants.some(p => p._id.toString() === senderId)) {
-        socket.emit('message_error', { 
+        socket.emit('message_error', {
           error: 'Unauthorized sender',
-          messageId 
+          messageId
         });
         return;
       }
@@ -479,14 +479,14 @@ socket.on('join', async (incomingUserId) => {
       // ✅ Route to other participants
       conversation.participants.forEach((participant) => {
         const participantId = participant._id.toString();
-        
+
         if (participantId !== senderId) {
           // 🔍 Check if recipient is actively viewing this chat
           const isInActiveChat = isUserInActiveChat(participantId, conversationId);
-          
+
           // Set status based on active chat state
           const messageStatus = isInActiveChat ? 'read' : 'delivered';
-          
+
           console.log(`📬 Sending to ${participantId}: status=${messageStatus}, inActiveChat=${isInActiveChat}`);
 
           // Send message with correct status
@@ -499,19 +499,23 @@ socket.on('join', async (incomingUserId) => {
             timestamp: timestamp || new Date().toISOString(),
             status: messageStatus,
           });
-          
+
           // ✅ Emit delivered status back to sender
-          io.to(senderId).emit('message_delivered', {
-            messageId,
-            conversationId,
-            status: 'delivered',
-            timestamp: new Date().toISOString(),
-          });
+          const recipientRoom = io.sockets.adapter.rooms.get(participantId);
+          const recipientIsOnline = recipientRoom && recipientRoom.size > 0;
+          if (recipientIsOnline) {
+            io.to(senderId).emit('message_delivered', {
+              messageId,
+              conversationId,
+              status: 'delivered',
+              timestamp: new Date().toISOString(),
+            });
+          }
 
           // ✅ If recipient is in active chat, INSTANTLY mark as read
           if (isInActiveChat) {
             console.log(`👀 Recipient ${participantId} is viewing chat - marking as read INSTANTLY`);
-            
+
             // Mark message as read in database
             Message.findByIdAndUpdate(messageId, { status: 'read' })
               .catch(err => console.error('Failed to update message status:', err));
@@ -533,7 +537,7 @@ socket.on('join', async (incomingUserId) => {
 
             // ✅ Also emit general messages_read event
             conversation.participants.forEach((p) => {
-              io.to(p._id.toString()).emit('messages_read', { 
+              io.to(p._id.toString()).emit('messages_read', {
                 conversationId,
                 userId: participantId,
                 timestamp: new Date().toISOString(),
@@ -544,12 +548,12 @@ socket.on('join', async (incomingUserId) => {
       });
 
       console.log(`✅ Message routed successfully`);
-      
+
     } catch (error) {
       console.error('❌ Message routing error:', error);
-      socket.emit('message_error', { 
+      socket.emit('message_error', {
         error: error.message,
-        messageId: data.messageId 
+        messageId: data.messageId
       });
     }
   });
@@ -560,10 +564,10 @@ socket.on('join', async (incomingUserId) => {
   socket.on('typing', async (data) => {
     try {
       const { conversationId, userId: typingUserId, isTyping } = data;
-      
+
       const conversation = await Conversation.findById(conversationId)
         .populate('participants');
-        
+
       if (conversation) {
         conversation.participants.forEach((participant) => {
           if (participant._id.toString() !== typingUserId) {
@@ -586,10 +590,10 @@ socket.on('join', async (incomingUserId) => {
   socket.on('recording_indicator', async (data) => {
     try {
       const { conversationId, isRecording } = data;
-      
+
       const conversation = await Conversation.findById(conversationId)
         .populate('participants');
-        
+
       if (conversation) {
         conversation.participants.forEach((participant) => {
           if (participant._id.toString() !== userId) {
@@ -617,9 +621,9 @@ socket.on('join', async (incomingUserId) => {
       socket.emit('mark_read_success', { conversationId });
     } catch (error) {
       console.error('❌ Mark read error:', error);
-      socket.emit('error', { 
-        action: 'mark_read', 
-        error: error.message 
+      socket.emit('error', {
+        action: 'mark_read',
+        error: error.message
       });
     }
   });
@@ -634,7 +638,7 @@ socket.on('join', async (incomingUserId) => {
 
       await UserStatus.findOneAndUpdate(
         { userId: userIdToUse },
-        { 
+        {
           lastSeen: new Date(),
           socketId: socket.id,
           isOnline: true
@@ -652,7 +656,7 @@ socket.on('join', async (incomingUserId) => {
   // ============================================================================
   socket.on('disconnect', async () => {
     console.log('🔌 User disconnected:', socket.id);
-    
+
     try {
       if (userId) {
         // Clear active chat session
@@ -768,16 +772,16 @@ app.get('/api/products/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
     const Product = require('./model/product'); // Adjust path
-    
+
     const product = await Product.findById(productId)
       .populate('sellerId', 'name businessInfo')
       .populate('proSubCategoryId', 'name')
       .lean();
-    
+
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
-    
+
     res.json(product);
   } catch (error) {
     console.error('Error fetching product:', error);
@@ -790,15 +794,15 @@ app.get('/api/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const User = require('./model/user'); // Adjust path
-    
+
     const user = await User.findById(userId)
       .select('name email businessInfo createdAt phoneNumber')
       .lean();
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     res.json(user);
   } catch (error) {
     console.error('Error fetching user:', error);
@@ -811,22 +815,22 @@ app.get('/api/products/seller/:sellerId', async (req, res) => {
   try {
     const { sellerId } = req.params;
     const Product = require('./model/product');
-    
+
     console.log(`📦 Fetching products for seller: ${sellerId}`);
-    
-    const products = await Product.find({ 
+
+    const products = await Product.find({
       sellerId: sellerId,
-      isDeleted: { $ne: true } 
+      isDeleted: { $ne: true }
     })
-      .populate('proCategoryId', 'name')      
-      .populate('proSubCategoryId', 'name')   
+      .populate('proCategoryId', 'name')
+      .populate('proSubCategoryId', 'name')
       .populate('proBrandId', 'name')
       .populate('sellerId', 'fullName email businessInfo createdAt')
       .sort({ createdAt: -1 })
       .lean();
-    
+
     console.log(`✅ Found ${products.length} products`); // ADD THIS
-    
+
     res.json(products);
   } catch (error) {
     console.error('❌ Error:', error);
@@ -839,12 +843,12 @@ app.get('/api/sellers/:sellerId/stats', async (req, res) => {
   try {
     const { sellerId } = req.params;
     const Product = require('./model/product'); // Adjust path
-    
-    const totalProducts = await Product.countDocuments({ 
+
+    const totalProducts = await Product.countDocuments({
       sellerId: sellerId,
-      isDeleted: { $ne: true } 
+      isDeleted: { $ne: true }
     });
-    
+
     res.json({
       totalProducts,
       totalSales: 0, // Implement if you have sales data
