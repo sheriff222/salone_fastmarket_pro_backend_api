@@ -478,19 +478,15 @@ io.on('connection', (socket) => {
 
       // ✅ Route to other participants
       conversation.participants.forEach((participant) => {
-        const participantId = participant._id.toString();
+    const participantId = participant._id.toString();
+    if (participantId !== senderId) {
+        const isInActiveChat = isUserInActiveChat(participantId, conversationId);
+        const messageStatus = isInActiveChat ? 'read' : 'delivered';
 
-        if (participantId !== senderId) {
-          // 🔍 Check if recipient is actively viewing this chat
-          const isInActiveChat = isUserInActiveChat(participantId, conversationId);
+        const buyerId = (conversation.buyerId?._id || conversation.buyerId).toString();
+        const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
 
-          // Set status based on active chat state
-          const messageStatus = isInActiveChat ? 'read' : 'delivered';
-
-          console.log(`📬 Sending to ${participantId}: status=${messageStatus}, inActiveChat=${isInActiveChat}`);
-
-          // Send message with correct status
-          io.to(participantId).emit('new_message', {
+        io.to(participantId).emit('new_message', {
             messageId,
             conversationId,
             senderId,
@@ -498,54 +494,16 @@ io.on('connection', (socket) => {
             content,
             timestamp: timestamp || new Date().toISOString(),
             status: messageStatus,
-          });
-
-          // ✅ Emit delivered status back to sender
-          const recipientRoom = io.sockets.adapter.rooms.get(participantId);
-          const recipientIsOnline = recipientRoom && recipientRoom.size > 0;
-          if (recipientIsOnline) {
-            io.to(senderId).emit('message_delivered', {
-              messageId,
-              conversationId,
-              status: 'delivered',
-              timestamp: new Date().toISOString(),
-            });
-          }
-
-          // ✅ If recipient is in active chat, INSTANTLY mark as read
-          if (isInActiveChat) {
-            console.log(`👀 Recipient ${participantId} is viewing chat - marking as read INSTANTLY`);
-
-            // Mark message as read in database
-            Message.findByIdAndUpdate(messageId, { status: 'read' })
-              .catch(err => console.error('Failed to update message status:', err));
-
-            // Clear unread count for recipient
-            const recipientIdStr = participantId.toString();
-            if (conversation.unreadCounts && recipientIdStr) {
-              conversation.unreadCounts.set(recipientIdStr, 0);
-              conversation.save().catch(err => console.error('Failed to save conversation:', err));
+            roleContext: {
+                recipientRole: participantId === buyerId ? 'buyer' : 'seller',
+                senderRole: participantId === buyerId ? 'seller' : 'buyer',
+                conversationId: conversationId,
+                buyerId: buyerId,
+                sellerId: sellerId,
             }
-
-            // ✅ Emit read status back to sender INSTANTLY
-            io.to(senderId).emit('message_read', {
-              messageId,
-              conversationId,
-              status: 'read',
-              timestamp: new Date().toISOString(),
-            });
-
-            // ✅ Also emit general messages_read event
-            conversation.participants.forEach((p) => {
-              io.to(p._id.toString()).emit('messages_read', {
-                conversationId,
-                userId: participantId,
-                timestamp: new Date().toISOString(),
-              });
-            });
-          }
-        }
-      });
+        });
+    }
+});
 
       console.log(`✅ Message routed successfully`);
 

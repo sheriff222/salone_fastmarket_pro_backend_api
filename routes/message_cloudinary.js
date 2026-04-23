@@ -784,16 +784,34 @@ async function emitToParticipants(conversation, payload) {
             return;
         }
 
-        if (conversation.buyerId) {
-            const buyerSocketId = conversation.buyerId._id || conversation.buyerId;
-            socketIO.to(buyerSocketId.toString()).emit('send_message', payload);
-        }
-        
-        if (conversation.sellerId) {
-            const sellerSocketId = conversation.sellerId._id || conversation.sellerId;
-            socketIO.to(sellerSocketId.toString()).emit('send_message', payload);
-        }
-        
+        const buyerId = (conversation.buyerId?._id || conversation.buyerId).toString();
+        const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
+        const conversationId = conversation._id.toString();
+
+        // Emit to buyer — tell them they are the buyer in this conversation
+        socketIO.to(buyerId).emit('new_message', {
+            ...payload,
+            roleContext: {
+                recipientRole: 'buyer',       // ← the role of the person receiving this
+                senderRole: payload.roleContext?.senderRole,
+                conversationId: conversationId,
+                buyerId: buyerId,
+                sellerId: sellerId,
+            }
+        });
+
+        // Emit to seller — tell them they are the seller in this conversation
+        socketIO.to(sellerId).emit('new_message', {
+            ...payload,
+            roleContext: {
+                recipientRole: 'seller',      // ← the role of the person receiving this
+                senderRole: payload.roleContext?.senderRole,
+                conversationId: conversationId,
+                buyerId: buyerId,
+                sellerId: sellerId,
+            }
+        });
+
     } catch (socketError) {
         console.error('Socket emission error:', socketError);
     }
