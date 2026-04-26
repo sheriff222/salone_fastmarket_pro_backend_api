@@ -96,41 +96,86 @@ class PushNotificationService {
    * Send new message notification
    */
   static async sendMessageNotification(senderId, receiverId, conversationId, messagePreview, messageType = 'text') {
-    try {
-      const User = require('../model/user');
-      const sender = await User.findById(senderId).select('fullName');
-      
-      if (!sender) {
-        console.error('❌ Sender not found');
-        return { success: false };
-      }
-
-      let bodyText = messagePreview;
-      if (messageType === 'image') bodyText = '📷 Sent a photo';
-      else if (messageType === 'video') bodyText = '🎥 Sent a video';
-      else if (messageType === 'voice') bodyText = '🎵 Sent a voice message';
-      else if (messageType === 'document') bodyText = '📄 Sent a document';
-
-      const notification = {
-        title: sender.fullName,
-        body: bodyText
-      };
-
-      const data = {
-        type: 'new_message',
-        conversationId: conversationId.toString(),
-        senderId: senderId.toString(),
-        messageType,
-        screen: 'messages'
-      };
-
-      return await this.sendToUser(receiverId, notification, data);
-      
-    } catch (error) {
-      console.error('❌ sendMessageNotification error:', error);
-      return { success: false, error: error.message };
+  try {
+    const User = require('../model/user');
+    const sender = await User.findById(senderId).select('fullName');
+ 
+    if (!sender) {
+      console.error('❌ Sender not found');
+      return { success: false };
     }
+ 
+    let bodyText = messagePreview;
+    if (messageType === 'image')    bodyText = '📷 Photo';
+    else if (messageType === 'video')    bodyText = '🎥 Video';
+    else if (messageType === 'voice')    bodyText = '🎵 Voice message';
+    else if (messageType === 'document') bodyText = '📄 Document';
+ 
+    // ✅ KEY FIX: DATA-ONLY message — no top-level `notification` field.
+    // This prevents Android from handling the notification system-side
+    // which would strip all custom actions (quick reply, inline reply).
+    // flutter_local_notifications builds the visible notification inside
+    // firebaseMessagingBackgroundHandler / onMessage instead.
+    const data = {
+      type:           'new_message',
+      conversationId: conversationId.toString(),
+      senderId:       senderId.toString(),
+      senderName:     sender.fullName,   // ← Flutter reads this for the title
+      messageType,
+      messageBody:    bodyText,          // ← Flutter reads this for the body
+      screen:         'messages',
+      timestamp:      new Date().toISOString(),
+    };
+ 
+    const devices = await UserDevice.find({ userId: receiverId, isActive: true });
+    if (devices.length === 0) {
+      console.log(`⚠️ No active devices for user ${receiverId}`);
+      return { success: false, reason: 'no_devices' };
+    }
+ 
+    const messaging = getMessaging();
+    const tokens    = devices.map(d => d.fcmToken);
+ 
+    const message = {
+      // ✅ NO `notification` field here — data-only
+      data,
+      tokens,
+      android: {
+        priority: 'high',
+        // ✅ content_available keeps the background handler alive
+        ttl: 60000,
+      },
+      apns: {
+        payload: {
+          aps: {
+            'content-available': 1,  // silent push for iOS background
+            sound: 'default',
+          },
+        },
+        headers: {
+          'apns-priority': '10',
+        },
+      },
+    };
+ 
+    const response = await messaging.sendEachForMulticast(message);
+    console.log(`✅ Push sent to ${response.successCount}/${tokens.length} devices (data-only)`);
+ 
+    if (response.failureCount > 0) {
+      await this.cleanupInvalidTokens(tokens, response.responses);
+    }
+ 
+    return {
+      success:      response.successCount > 0,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+    };
+ 
+  } catch (error) {
+    console.error('❌ sendMessageNotification error:', error);
+    return { success: false, error: error.message };
   }
+}
 
   /**
    * Send unresolved conversation reminder
