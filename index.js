@@ -488,55 +488,71 @@ socket.on('send_message', async (data) => {
   // ============================================================================
   // TYPING INDICATOR
   // ============================================================================
+  
   socket.on('typing', async (data) => {
     try {
       const { conversationId, userId: typingUserId, isTyping } = data;
-
+ 
       const conversation = await Conversation.findById(conversationId)
         .populate('participants');
-
-      if (conversation) {
-        conversation.participants.forEach((participant) => {
-          if (participant._id.toString() !== typingUserId) {
-            io.to(participant._id.toString()).emit('user_typing', {
-              conversationId,
-              userId: typingUserId,
-              isTyping,
-            });
-          }
+ 
+      if (!conversation) return;
+ 
+      conversation.participants.forEach((participant) => {
+        const participantId = participant._id.toString();
+        if (participantId === typingUserId) return; // skip sender
+ 
+        // ✅ Only deliver typing if the recipient is viewing THIS conversation
+        const recipientActiveConv = activeChats.get(participantId);
+        if (recipientActiveConv !== conversationId) {
+          console.log(`🔇 Suppressing typing for ${participantId} — viewing ${recipientActiveConv}, not ${conversationId}`);
+          return;
+        }
+ 
+        io.to(participantId).emit('user_typing', {
+          conversationId,
+          userId: typingUserId,
+          isTyping,
         });
-      }
+      });
     } catch (error) {
       console.error('❌ Typing indicator error:', error);
     }
   });
 
+
   // ============================================================================
   // RECORDING INDICATOR
   // ============================================================================
-  socket.on('recording_indicator', async (data) => {
+    socket.on('recording_indicator', async (data) => {
     try {
       const { conversationId, isRecording } = data;
-
+ 
       const conversation = await Conversation.findById(conversationId)
         .populate('participants');
-
-      if (conversation) {
-        conversation.participants.forEach((participant) => {
-          if (participant._id.toString() !== userId) {
-            io.to(participant._id.toString()).emit('recording_indicator', {
-              userId,
-              conversationId,
-              isRecording,
-              timestamp: new Date().toISOString(),
-            });
-          }
+ 
+      if (!conversation) return;
+ 
+      conversation.participants.forEach((participant) => {
+        const participantId = participant._id.toString();
+        if (participantId === userId) return; // skip sender
+ 
+        // ✅ Only deliver recording indicator to users viewing this conversation
+        const recipientActiveConv = activeChats.get(participantId);
+        if (recipientActiveConv !== conversationId) return;
+ 
+        io.to(participantId).emit('recording_indicator', {
+          userId,
+          conversationId,
+          isRecording,
+          timestamp: new Date().toISOString(),
         });
-      }
+      });
     } catch (error) {
       console.error('❌ Recording indicator error:', error);
     }
   });
+
 
   // ============================================================================
   // MANUAL MARK AS READ (legacy support)
