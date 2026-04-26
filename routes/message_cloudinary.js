@@ -496,7 +496,6 @@ router.post('/text', asyncHandler(async (req, res) => {
             message: "conversationId, senderId, and text are required." 
         });
     }
-a
     const conversation = await Conversation.findById(conversationId).populate([
         { path: 'buyerId', select: 'fullName phoneNumber accountType' },
         { path: 'sellerId', select: 'fullName phoneNumber accountType' }
@@ -845,10 +844,10 @@ async function emitToParticipants(conversation, payload) {
             return;
         }
  
-        const buyerId  = (conversation.buyerId?._id  || conversation.buyerId).toString();
-        const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
+        const buyerId        = (conversation.buyerId?._id  || conversation.buyerId).toString();
+        const sellerId       = (conversation.sellerId?._id || conversation.sellerId).toString();
         const conversationId = conversation._id.toString();
-        const senderId = payload.senderId?.toString();
+        const senderId       = payload.senderId?.toString();
  
         const recipients = [
             { id: buyerId,  role: 'buyer'  },
@@ -856,8 +855,7 @@ async function emitToParticipants(conversation, payload) {
         ];
  
         for (const recipient of recipients) {
-            // ✅ Skip the sender — they already have the message optimistically
-            if (recipient.id === senderId) continue;
+            if (recipient.id === senderId) continue; // skip sender
  
             socketIO.to(recipient.id).emit('new_message', {
                 ...payload,
@@ -872,11 +870,9 @@ async function emitToParticipants(conversation, payload) {
  
             console.log(`📨 new_message emitted to ${recipient.role} (${recipient.id})`);
  
-            // ✅ Tell the sender the message was delivered (double grey tick)
-            //    Only if the receiver is currently connected
+            // Delivered tick — only if receiver is online
             const receiverSockets = socketIO.sockets.adapter.rooms.get(recipient.id);
             const receiverIsOnline = receiverSockets && receiverSockets.size > 0;
- 
             if (receiverIsOnline) {
                 socketIO.to(senderId).emit('message_delivered', {
                     messageId:    payload.messageId,
@@ -886,12 +882,16 @@ async function emitToParticipants(conversation, payload) {
                 });
                 console.log(`📬 message_delivered emitted to sender ${senderId}`);
             }
+ 
+            // ✅ NO sendPushNotificationIfNeeded here — removed to prevent
+            // duplicate notifications. The calling HTTP route handles it.
         }
  
     } catch (socketError) {
         console.error('Socket emission error:', socketError);
     }
 }
+
  
 
 
