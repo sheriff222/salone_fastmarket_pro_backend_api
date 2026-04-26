@@ -174,6 +174,66 @@ router.get('/conversations/user/:userId', asyncHandler(async (req, res) => {
     });
 }));
 
+router.get('/conversations/:conversationId', asyncHandler(async (req, res) => {
+    const { conversationId } = req.params;
+    const { userId } = req.query; // the current user — used to determine participant
+ 
+    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid conversationId.'
+        });
+    }
+ 
+    const conversation = await Conversation.findById(conversationId).populate([
+        { path: 'buyerId',   select: 'fullName phoneNumber accountType' },
+        { path: 'sellerId',  select: 'fullName phoneNumber accountType' },
+        { path: 'productId', select: 'name images' },
+        { path: 'lastMessage.sender', select: 'fullName' }
+    ]);
+ 
+    if (!conversation) {
+        return res.status(404).json({
+            success: false,
+            message: 'Conversation not found.'
+        });
+    }
+ 
+    // Determine which side the requesting user is on
+    const buyerIdStr  = (conversation.buyerId?._id  || conversation.buyerId)?.toString();
+    const sellerIdStr = (conversation.sellerId?._id || conversation.sellerId)?.toString();
+ 
+    let currentUserRole = null;
+    let participant     = null;
+ 
+    if (userId) {
+        if (userId === buyerIdStr) {
+            currentUserRole = 'buyer';
+            participant     = conversation.sellerId;   // populated seller object
+        } else if (userId === sellerIdStr) {
+            currentUserRole = 'seller';
+            participant     = conversation.buyerId;    // populated buyer object
+        }
+    }
+ 
+    res.json({
+        success: true,
+        message: 'Conversation retrieved successfully.',
+        data: {
+            _id:             conversation._id,
+            participant,                               // full User object
+            product:         conversation.productId,
+            lastMessage:     conversation.lastMessage,
+            unreadCount:     userId ? (conversation.unreadCounts.get(userId) || 0) : 0,
+            updatedAt:       conversation.updatedAt,
+            createdAt:       conversation.createdAt,
+            buyerId:         buyerIdStr,
+            sellerId:        sellerIdStr,
+            currentUserRole,
+        }
+    });
+}));
+
 
 
 // Get messages in conversation
