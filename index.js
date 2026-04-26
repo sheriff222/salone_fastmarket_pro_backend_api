@@ -429,20 +429,13 @@ io.on('connection', (socket) => {
   // MESSAGE ROUTING with INSTANT READ DETECTION
   // ============================================================================
 
-  socket.on('send_message', async (data) => {
+socket.on('send_message', async (data) => {
     try {
-      const {
-        messageId,
-        conversationId,
-        senderId,
-        messageType,
-        content,
-        timestamp
-      } = data;
+      const { messageId, conversationId, senderId } = data;
  
-      console.log('📡 Message metadata received:', { messageId, conversationId });
+      console.log('📡 Message metadata received (socket):', { messageId, conversationId });
  
-      if (!messageId || !conversationId || !senderId || !messageType || !content) {
+      if (!messageId || !conversationId || !senderId) {
         socket.emit('message_error', {
           error: 'Invalid message metadata',
           messageId
@@ -451,7 +444,7 @@ io.on('connection', (socket) => {
       }
  
       const conversation = await Conversation.findById(conversationId)
-        .populate('participants buyerId sellerId');
+        .populate('participants');
  
       if (!conversation) {
         socket.emit('message_error', {
@@ -469,7 +462,10 @@ io.on('connection', (socket) => {
         return;
       }
  
-      // ✅ ACK back to sender — single tick (sent)
+      // ✅ ONLY send the ACK back to the sender (single tick → sent)
+      //    Do NOT emit new_message here — the HTTP route already did it
+      //    with the real MongoDB ID. Emitting again here would send the
+      //    temp ID to the receiver, causing the duplicate.
       socket.emit('message_sent', {
         messageId,
         conversationId,
@@ -477,59 +473,7 @@ io.on('connection', (socket) => {
         timestamp: new Date().toISOString(),
       });
  
-      // ✅ Route to OTHER participants only
-      conversation.participants.forEach((participant) => {
-        const participantId = participant._id.toString();
- 
-        // Skip the sender — they already have the message
-        if (participantId === senderId) return;
- 
-        const isInActiveChat = isUserInActiveChat(participantId, conversationId);
-        const messageStatus  = isInActiveChat ? 'read' : 'delivered';
- 
-        const buyerId  = (conversation.buyerId?._id  || conversation.buyerId).toString();
-        const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
- 
-        // Deliver the message to the receiver
-        io.to(participantId).emit('new_message', {
-          messageId,
-          conversationId,
-          senderId,
-          messageType,
-          content,
-          timestamp: timestamp || new Date().toISOString(),
-          status: messageStatus,
-          roleContext: {
-            recipientRole:  participantId === buyerId ? 'buyer' : 'seller',
-            senderRole:     participantId === buyerId ? 'seller' : 'buyer',
-            conversationId,
-            buyerId,
-            sellerId,
-          }
-        });
- 
-        // ✅ NEW: emit message_delivered back to the SENDER
-        //    We emit this unconditionally here — if the socket room for
-        //    participantId has at least one connected socket the receiver is
-        //    online, meaning the message has been delivered to their device.
-        //    (If the room is empty the emit is a no-op and the single tick stays.)
-        const receiverSockets = io.sockets.adapter.rooms.get(participantId);
-        const receiverIsOnline = receiverSockets && receiverSockets.size > 0;
- 
-        if (receiverIsOnline) {
-          // Tell the sender their message was delivered (double grey tick)
-          io.to(senderId).emit('message_delivered', {
-            messageId,
-            conversationId,
-            status: 'delivered',
-            timestamp: new Date().toISOString(),
-          });
- 
-          console.log(`📬 message_delivered emitted to sender ${senderId} for message ${messageId}`);
-        }
-      });
- 
-      console.log('✅ Message routed successfully');
+      console.log(`✅ message_sent ACK emitted to sender for ${messageId}`);
  
     } catch (error) {
       console.error('❌ Message routing error:', error);
