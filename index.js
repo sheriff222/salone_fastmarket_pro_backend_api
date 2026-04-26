@@ -428,6 +428,7 @@ io.on('connection', (socket) => {
   // ============================================================================
   // MESSAGE ROUTING with INSTANT READ DETECTION
   // ============================================================================
+
   socket.on('send_message', async (data) => {
     try {
       const {
@@ -438,9 +439,9 @@ io.on('connection', (socket) => {
         content,
         timestamp
       } = data;
-
+ 
       console.log('📡 Message metadata received:', { messageId, conversationId });
-
+ 
       if (!messageId || !conversationId || !senderId || !messageType || !content) {
         socket.emit('message_error', {
           error: 'Invalid message metadata',
@@ -448,10 +449,10 @@ io.on('connection', (socket) => {
         });
         return;
       }
-
+ 
       const conversation = await Conversation.findById(conversationId)
         .populate('participants buyerId sellerId');
-
+ 
       if (!conversation) {
         socket.emit('message_error', {
           error: 'Conversation not found',
@@ -459,7 +460,7 @@ io.on('connection', (socket) => {
         });
         return;
       }
-
+ 
       if (!conversation.participants.some(p => p._id.toString() === senderId)) {
         socket.emit('message_error', {
           error: 'Unauthorized sender',
@@ -467,46 +468,69 @@ io.on('connection', (socket) => {
         });
         return;
       }
-
-      // ✅ Send ACK to sender
+ 
+      // ✅ ACK back to sender — single tick (sent)
       socket.emit('message_sent', {
         messageId,
         conversationId,
         status: 'sent',
         timestamp: new Date().toISOString(),
       });
-
-      // ✅ Route to other participants
+ 
+      // ✅ Route to OTHER participants only
       conversation.participants.forEach((participant) => {
-    const participantId = participant._id.toString();
-    if (participantId !== senderId) {
+        const participantId = participant._id.toString();
+ 
+        // Skip the sender — they already have the message
+        if (participantId === senderId) return;
+ 
         const isInActiveChat = isUserInActiveChat(participantId, conversationId);
-        const messageStatus = isInActiveChat ? 'read' : 'delivered';
-
-        const buyerId = (conversation.buyerId?._id || conversation.buyerId).toString();
+        const messageStatus  = isInActiveChat ? 'read' : 'delivered';
+ 
+        const buyerId  = (conversation.buyerId?._id  || conversation.buyerId).toString();
         const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
-
+ 
+        // Deliver the message to the receiver
         io.to(participantId).emit('new_message', {
+          messageId,
+          conversationId,
+          senderId,
+          messageType,
+          content,
+          timestamp: timestamp || new Date().toISOString(),
+          status: messageStatus,
+          roleContext: {
+            recipientRole:  participantId === buyerId ? 'buyer' : 'seller',
+            senderRole:     participantId === buyerId ? 'seller' : 'buyer',
+            conversationId,
+            buyerId,
+            sellerId,
+          }
+        });
+ 
+        // ✅ NEW: emit message_delivered back to the SENDER
+        //    We emit this unconditionally here — if the socket room for
+        //    participantId has at least one connected socket the receiver is
+        //    online, meaning the message has been delivered to their device.
+        //    (If the room is empty the emit is a no-op and the single tick stays.)
+        const receiverSockets = io.sockets.adapter.rooms.get(participantId);
+        const receiverIsOnline = receiverSockets && receiverSockets.size > 0;
+ 
+        if (receiverIsOnline) {
+          // Tell the sender their message was delivered (double grey tick)
+          io.to(senderId).emit('message_delivered', {
             messageId,
             conversationId,
-            senderId,
-            messageType,
-            content,
-            timestamp: timestamp || new Date().toISOString(),
-            status: messageStatus,
-            roleContext: {
-                recipientRole: participantId === buyerId ? 'buyer' : 'seller',
-                senderRole: participantId === buyerId ? 'seller' : 'buyer',
-                conversationId: conversationId,
-                buyerId: buyerId,
-                sellerId: sellerId,
-            }
-        });
-    }
-});
-
-      console.log(`✅ Message routed successfully`);
-
+            status: 'delivered',
+            timestamp: new Date().toISOString(),
+          });
+ 
+          console.log(`📬 message_delivered emitted to sender ${senderId} for message ${messageId}`);
+        }
+      });
+ 
+      console.log('✅ Message routed successfully');
+ 
     } catch (error) {
       console.error('❌ Message routing error:', error);
       socket.emit('message_error', {
@@ -515,6 +539,7 @@ io.on('connection', (socket) => {
       });
     }
   });
+
 
   // ============================================================================
   // TYPING INDICATOR

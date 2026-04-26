@@ -776,6 +776,7 @@ async function updateConversationLastMessage(conversation, message, senderId) {
   }
 }
 
+ 
 async function emitToParticipants(conversation, payload) {
     try {
         const socketIO = getIO();
@@ -783,39 +784,44 @@ async function emitToParticipants(conversation, payload) {
             console.warn('Socket.IO not available');
             return;
         }
-
-        const buyerId = (conversation.buyerId?._id || conversation.buyerId).toString();
+ 
+        const buyerId  = (conversation.buyerId?._id  || conversation.buyerId).toString();
         const sellerId = (conversation.sellerId?._id || conversation.sellerId).toString();
         const conversationId = conversation._id.toString();
-
-        // Emit to buyer — tell them they are the buyer in this conversation
-        socketIO.to(buyerId).emit('new_message', {
-            ...payload,
-            roleContext: {
-                recipientRole: 'buyer',       // ← the role of the person receiving this
-                senderRole: payload.roleContext?.senderRole,
-                conversationId: conversationId,
-                buyerId: buyerId,
-                sellerId: sellerId,
-            }
-        });
-
-        // Emit to seller — tell them they are the seller in this conversation
-        socketIO.to(sellerId).emit('new_message', {
-            ...payload,
-            roleContext: {
-                recipientRole: 'seller',      // ← the role of the person receiving this
-                senderRole: payload.roleContext?.senderRole,
-                conversationId: conversationId,
-                buyerId: buyerId,
-                sellerId: sellerId,
-            }
-        });
-
+ 
+        // The sender's ID comes in from the payload (set by the calling route).
+        // We never emit new_message back to the sender — they already have the
+        // message in their UI from the optimistic insert.
+        const senderId = payload.senderId?.toString();
+ 
+        const recipients = [
+            { id: buyerId,  role: 'buyer'  },
+            { id: sellerId, role: 'seller' },
+        ];
+ 
+        for (const recipient of recipients) {
+            // ✅ KEY FIX: skip the sender
+            if (recipient.id === senderId) continue;
+ 
+            socketIO.to(recipient.id).emit('new_message', {
+                ...payload,
+                roleContext: {
+                    recipientRole: recipient.role,
+                    senderRole:    payload.roleContext?.senderRole,
+                    conversationId,
+                    buyerId,
+                    sellerId,
+                },
+            });
+ 
+            console.log(`📨 new_message emitted to ${recipient.role} (${recipient.id})`);
+        }
+ 
     } catch (socketError) {
         console.error('Socket emission error:', socketError);
     }
 }
+
 
 // Mark messages as read
 router.put('/conversations/:conversationId/read', asyncHandler(async (req, res) => {
