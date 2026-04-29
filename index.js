@@ -13,6 +13,8 @@ const favoriteRouter = require('./routes/favorites');
 const sponsoredProductRoutes = require('./routes/sponsoredProducts');
 const enhancedProductFeedRoutes = require('./routes/enhancedProductFeed');
 const searchRoutes = require('./routes/searchRoutes');
+const {router: dialogRouter, setupDialogSocket} = require('./routes/setupDialogSocket');
+
 dotenv.config();
 
 const { verifyCloudinaryConfig, testCloudinaryConnection } = require('./config/cloudinary');
@@ -637,6 +639,13 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cors({ origin: '*' }));
 
+
+
+setupDialogSocket(io);
+
+
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Static file paths for all content
 app.use('/image/products', express.static(path.join(__dirname, 'public/products')));
 app.use('/image/category', express.static(path.join(__dirname, 'public/category')));
@@ -675,6 +684,7 @@ app.use('/bulk', require('./routes/bulkUpload'));
 app.use('/api/search', searchRoutes);
 app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
+app.use('/system-dialogs', dialogRouter);
 
 app.get('/.well-known/assetlinks.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
@@ -811,6 +821,8 @@ app.use((error, req, res, next) => {
 
 verifyCloudinaryConfig();
 testCloudinaryConnection();
+
+
 
 // Start server
 const HOST = '0.0.0.0';
