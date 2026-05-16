@@ -33,20 +33,38 @@ router.post('/send/text', async (req, res) => {
     const apiKey = getApiKey(req);
     if (!apiKey) return res.status(401).json({ success: false, message: 'Missing Evolution API key' });
 
-    const { number, text } = req.body;
+    let { number, text } = req.body;
     if (!number || !text) return res.status(400).json({ success: false, message: 'number and text are required' });
+
+    // Clean the JID — remove whitespace, decode URI encoding
+    number = decodeURIComponent(number.trim());
+
+    console.log('📤 Sending to number:', number);
+    console.log('📤 Text length:', text.length);
+
+    const payload = { number, text };
+    console.log('📤 Payload:', JSON.stringify(payload));
 
     const response = await evoFetch(
       `${EVOLUTION_API_URL}/message/sendText/${INSTANCE_ENCODED}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': apiKey },
-        body: JSON.stringify({ number, text })
+        body: JSON.stringify(payload)
       }
     );
 
-    const data = await response.json();
-    res.status(response.status).json(data);
+    console.log('📨 Evolution response status:', response.status);
+    const rawText = await response.text();
+    console.log('📨 Evolution raw response:', rawText);
+
+    // Parse if JSON, otherwise return raw
+    try {
+      const data = JSON.parse(rawText);
+      res.status(response.status).json(data);
+    } catch {
+      res.status(response.status).send(rawText);
+    }
   } catch (err) {
     console.error('❌ WA send text error:', err.message);
     res.status(500).json({ success: false, message: err.message });
