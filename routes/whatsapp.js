@@ -9,7 +9,7 @@ const INSTANCE_ENCODED = encodeURIComponent(INSTANCE);
 
 function getApiKey(req) {
   // Accept from header or env
-  return req.headers['x-evolution-key'] || process.env.EVOLUTION_API_KEY || '';
+  return req.headers['x-evolution-key'] || process.env.EVOLUTION_API_KEY || 'jaf.salonefastmarket.com/@sfmadmin';
 }
 
 async function evoFetch(url, options = {}) {
