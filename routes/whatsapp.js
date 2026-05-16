@@ -7,9 +7,18 @@ const EVOLUTION_API_URL = 'https://evolution-api-mqvx.onrender.com';
 const INSTANCE = 'Salone Fast Market Express';
 const INSTANCE_ENCODED = encodeURIComponent(INSTANCE);
 
+// Allow browser access from any origin
+router.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, x-evolution-key, apikey, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 function getApiKey(req) {
   // Accept from header or env
-  return req.headers['x-evolution-key'] || process.env.EVOLUTION_API_KEY || 'jaf.salonefastmarket.com/@sfmadmin';
+  return req.headers['x-evolution-key'] || process.env.EVOLUTION_API_KEY || '';
 }
 
 async function evoFetch(url, options = {}) {
