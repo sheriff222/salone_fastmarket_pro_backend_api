@@ -686,6 +686,7 @@ app.use('/notifications', require('./routes/notifications'));
 app.use('/email', require('./routes/email'));
 app.use('/system-dialogs', dialogRouter);
 app.use('/whatsapp', require('./routes/whatsapp'));
+App.use('/whatsapp/timer', require('./routes/whatsappBulk'));
 
 app.get('/.well-known/assetlinks.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
